@@ -4,6 +4,24 @@ const fileUpload = require('express-fileupload');
 const path = require('path');
 const dotenv = require('dotenv');
 const { handleFileUpload } = require('./uplod_file_backend');
+const { 
+    getDistinctDegrees,
+    getDistinctDepartments,
+    getDistinctBatches,
+    getDistinctCourses,
+    getFacultyByFilters
+} = require('./analysis_backend');
+const {
+    getAllQuestions,
+    getQuestionsBySection,
+    getDistinctSectionTypes,
+    getAllOptions,
+    getOptionsForQuestion,
+    getQuestionsWithOptions,
+    submitFeedback,
+    addQuestion,
+    addQuestionOptions
+} = require('./questions');
 
 // Load environment variables
 dotenv.config();
@@ -18,11 +36,182 @@ app.use(fileUpload());
 
 // Test route
 app.get('/test', (req, res) => {
-    console.log('Test endpoint hit');
-    res.json({ message: 'Server is running and accessible' });
+    res.json({ message: 'Server is running' });
 });
 
-// Routes
+// Analysis routes
+app.get('/api/analysis/degrees', async (req, res) => {
+    try {
+        console.log('Fetching degrees...');
+        const degrees = await getDistinctDegrees();
+        console.log('Degrees fetched:', degrees);
+        res.json(degrees);
+    } catch (error) {
+        console.error('Error fetching degrees:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/analysis/departments', async (req, res) => {
+    try {
+        console.log('Fetching departments for degree:', req.query.degree);
+        const departments = await getDistinctDepartments(req.query.degree);
+        console.log('Departments fetched:', departments);
+        res.json(departments);
+    } catch (error) {
+        console.error('Error fetching departments:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/analysis/batches', async (req, res) => {
+    try {
+        console.log('Fetching batches for:', req.query.degree, req.query.dept);
+        const batches = await getDistinctBatches(req.query.degree, req.query.dept);
+        console.log('Batches fetched:', batches);
+        res.json(batches);
+    } catch (error) {
+        console.error('Error fetching batches:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/analysis/courses', async (req, res) => {
+    try {
+        console.log('Fetching courses for:', req.query);
+        const courses = await getDistinctCourses(
+            req.query.degree,
+            req.query.dept,
+            req.query.batch
+        );
+        console.log('Courses fetched:', courses);
+        res.json(courses);
+    } catch (error) {
+        console.error('Error fetching courses:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Faculty route
+app.get('/api/analysis/faculty', async (req, res) => {
+    try {
+        const { degree, dept, batch, course, staffId } = req.query;
+        if (!degree || !dept || !batch || !course) {
+            return res.status(400).json({ error: 'Missing required query params' });
+        }
+        const faculty = await getFacultyByFilters(degree, dept, batch, course, staffId);
+        res.json(faculty);
+    } catch (error) {
+        console.error('Error fetching faculty:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Questions routes
+app.get('/api/questions', async (req, res) => {
+    try {
+        const questions = await getAllQuestions();
+        res.json(questions);
+    } catch (error) {
+        console.error('Error fetching questions:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/questions/sections', async (req, res) => {
+    try {
+        const sectionTypes = await getDistinctSectionTypes();
+        res.json(sectionTypes);
+    } catch (error) {
+        console.error('Error fetching section types:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/questions/section/:sectionType', async (req, res) => {
+    try {
+        const { sectionType } = req.params;
+        const questions = await getQuestionsBySection(sectionType);
+        res.json(questions);
+    } catch (error) {
+        console.error('Error fetching questions by section:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/questions/options', async (req, res) => {
+    try {
+        const options = await getAllOptions();
+        res.json(options);
+    } catch (error) {
+        console.error('Error fetching options:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/questions/:questionId/options', async (req, res) => {
+    try {
+        const { questionId } = req.params;
+        const options = await getOptionsForQuestion(parseInt(questionId));
+        res.json(options);
+    } catch (error) {
+        console.error('Error fetching options for question:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/questions/with-options', async (req, res) => {
+    try {
+        const questionsWithOptions = await getQuestionsWithOptions();
+        res.json(questionsWithOptions);
+    } catch (error) {
+        console.error('Error fetching questions with options:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/questions', async (req, res) => {
+    try {
+        const questionData = req.body;
+        if (!questionData.section_type || !questionData.question || !questionData.column_name) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+        const result = await addQuestion(questionData);
+        res.status(201).json(result);
+    } catch (error) {
+        console.error('Error adding question:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/questions/options', async (req, res) => {
+    try {
+        const optionsData = req.body;
+        console.log('Received options data:', optionsData);
+        
+        if (!Array.isArray(optionsData) || optionsData.length === 0) {
+            return res.status(400).json({ error: 'Invalid options data' });
+        }
+        
+        // Ensure all options have the required fields
+        for (const option of optionsData) {
+            if (!option.question_id || !option.option_label || !option.option_text) {
+                return res.status(400).json({ 
+                    error: 'Missing required fields in options data',
+                    details: 'Each option must have question_id, option_label, and option_text'
+                });
+            }
+        }
+        
+        const result = await addQuestionOptions(optionsData);
+        res.status(201).json(result);
+    } catch (error) {
+        console.error('Error adding question options:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// File upload route
 app.post('/api/upload', async (req, res) => {
     try {
         console.log('Received upload request');
