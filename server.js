@@ -11,6 +11,7 @@ const {
     getDistinctCourses,
     getFacultyByFilters
 } = require('./analysis_backend');
+const { getFeedbackAnalysis } = require('./performance_analysis');
 const {
     getAllQuestions,
     getQuestionsBySection,
@@ -20,7 +21,9 @@ const {
     getQuestionsWithOptions,
     submitFeedback,
     addQuestion,
-    addQuestionOptions
+    addQuestionOptions,
+    updateQuestion,
+    updateQuestionOptions
 } = require('./questions');
 
 // Load environment variables
@@ -29,10 +32,20 @@ dotenv.config();
 const app = express();
 
 // Middleware
-app.use(cors());
+app.use(cors({
+    origin: 'http://localhost:3000',
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type']
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(fileUpload());
+
+// Report routes
+const reportRoutes = require('./report_routes');
+const bulkReportRoutes = require('./bulk_report_routes');
+app.use('/api/reports', reportRoutes);
+app.use('/api/bulk-reports', bulkReportRoutes);
 
 // Test route
 app.get('/test', (req, res) => {
@@ -107,6 +120,21 @@ app.get('/api/analysis/faculty', async (req, res) => {
     }
 });
 
+// Feedback analysis route
+app.get('/api/analysis/feedback', async (req, res) => {
+    try {
+        const { degree, dept, batch, course, staffId } = req.query;
+        if (!degree || !dept || !batch || !course) {
+            return res.status(400).json({ error: 'Missing required query params' });
+        }
+        const analysis = await getFeedbackAnalysis(degree, dept, batch, course, staffId);
+        res.json(analysis);
+    } catch (error) {
+        console.error('Error fetching feedback analysis:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Questions routes
 app.get('/api/questions', async (req, res) => {
     try {
@@ -166,6 +194,46 @@ app.get('/api/questions/with-options', async (req, res) => {
         res.json(questionsWithOptions);
     } catch (error) {
         console.error('Error fetching questions with options:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Update question route
+app.put('/api/questions/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const questionData = req.body;
+        console.log('Updating question:', id, questionData);
+
+        if (!questionData.section_type || !questionData.question || !questionData.column_name) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+
+        const result = await updateQuestion(id, questionData);
+        console.log('Update result:', result);
+        res.json(result);
+    } catch (error) {
+        console.error('Error updating question:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Update question options route
+app.put('/api/questions/:id/options', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const optionsData = req.body;
+        console.log('Updating options for question:', id, optionsData);
+
+        if (!Array.isArray(optionsData) || optionsData.length === 0) {
+            return res.status(400).json({ error: 'Invalid options data' });
+        }
+
+        const result = await updateQuestionOptions(id, optionsData);
+        console.log('Options update result:', result);
+        res.json(result);
+    } catch (error) {
+        console.error('Error updating question options:', error);
         res.status(500).json({ error: error.message });
     }
 });

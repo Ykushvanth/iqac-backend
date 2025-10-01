@@ -227,6 +227,88 @@ const addQuestionOptions = async (optionsData) => {
     }
 };
 
+// Update a question
+const updateQuestion = async (questionId, questionData) => {
+    try {
+        console.log('Updating question with ID:', questionId, 'Data:', questionData);
+        
+        if (!questionId) {
+            throw new Error('Question ID is required');
+        }
+
+        const { data, error } = await supabase
+            .from('questions')
+            .update(questionData)
+            .eq('id', questionId)
+            .select();
+            
+        if (error) {
+            console.error('Supabase error:', error);
+            throw error;
+        }
+
+        if (!data || data.length === 0) {
+            throw new Error('Question not found or update failed');
+        }
+
+        console.log('Question updated successfully:', data);
+        return { success: true, message: 'Question updated successfully', data };
+    } catch (error) {
+        console.error('Error updating question:', error);
+        throw error;
+    }
+};
+
+// Update options for a question
+const updateQuestionOptions = async (questionId, optionsData) => {
+    try {
+        console.log('Updating options for question ID:', questionId, 'Data:', optionsData);
+
+        if (!questionId) {
+            throw new Error('Question ID is required');
+        }
+
+        if (!Array.isArray(optionsData) || optionsData.length === 0) {
+            throw new Error('Invalid options data');
+        }
+
+        // First delete existing options
+        const { error: deleteError } = await supabase
+            .from('question_options')
+            .delete()
+            .eq('question_id', questionId);
+            
+        if (deleteError) {
+            console.error('Error deleting existing options:', deleteError);
+            throw deleteError;
+        }
+        
+        // Then insert new options
+        const optionsWithQuestionId = optionsData.map(option => ({
+            ...option,
+            question_id: questionId
+        }));
+        
+        console.log('Inserting new options:', optionsWithQuestionId);
+        
+        const { data, error } = await supabase
+            .from('question_options')
+            .insert(optionsWithQuestionId)
+            .select();
+            
+        if (error) {
+            console.error('Error inserting new options:', error);
+            throw error;
+        }
+
+        console.log('Options updated successfully:', data);
+        return { success: true, message: 'Question options updated successfully', data };
+    } catch (error) {
+        console.error('Error updating question options:', error);
+        throw error;
+    }
+};
+
 module.exports = {
     getAllQuestions,
     getQuestionsBySection,
@@ -236,5 +318,7 @@ module.exports = {
     getQuestionsWithOptions,
     submitFeedback,
     addQuestion,
-    addQuestionOptions
+    addQuestionOptions,
+    updateQuestion,
+    updateQuestionOptions
 };
