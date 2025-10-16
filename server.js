@@ -35,7 +35,7 @@ const app = express();
 
 // Middleware
 app.use(cors({
-    origin: 'https://iqac-feedback-analysis.vercel.app',
+    origin: 'https://iqac-frontend-b9gw.vercel.app',
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type']
 }));
