@@ -530,12 +530,12 @@ async function generateBulkReport(facultyAnalyses, filters) {
                     // Map values to 5-point scale: 1 (bad) = 1, 2 (neutral) = 3, 3 (good) = 5
                     let value;
                     if (option.value) {
-                        value = option.value === 1 ? 1 : option.value === 2 ? 3 : option.value === 3 ? 5 : option.value;
+                        value = option.value === 1 ? 0 : option.value === 2 ? 1 : option.value === 3 ? 2 : option.value;
                     } else {
                         switch (option.label) {
-                            case 'C': value = 5; break;  // Good
-                            case 'B': value = 3; break;  // Neutral
-                            case 'A': value = 1; break;  // Needs Improvement
+                            case 'C': value = 2; break;  // Good
+                            case 'B': value = 1; break;  // Neutral
+                            case 'A': value = 0; break;  // Needs Improvement
                             default: value = 0;
                         }
                     }
@@ -543,7 +543,7 @@ async function generateBulkReport(facultyAnalyses, filters) {
                     totalResponses += option.count;
                 });
 
-                const maxPossibleScore = totalResponses * 5;
+                const maxPossibleScore = totalResponses * 2;
                 const questionScore = maxPossibleScore > 0 ? (weightedSum / maxPossibleScore) * 100 : 0;
                 sectionScore += questionScore;
                 questionCount++;

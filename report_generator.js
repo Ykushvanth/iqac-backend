@@ -1060,15 +1060,15 @@ async function generateReport(analysisData, facultyData) {
             (question.options || []).forEach(option => {
                 let value;
                 if (option.value) {
-                    value = option.value === 1 ? 1 : option.value === 2 ? 3 : option.value === 3 ? 5 : option.value;
+                    value = option.value === 1 ? 0 : option.value === 2 ? 1 : option.value === 3 ? 2 : option.value;
                 } else {
-                    value = option.label === 'C' ? 5 : option.label === 'B' ? 3 : 1;
+                    value = option.label === 'C' ? 2 : option.label === 'B' ? 1 : 0;
                 }
                 weightedSum += option.count * value;
                 totalResponses += option.count;
             });
             
-            const maxPossibleScore = totalResponses * 5;
+            const maxPossibleScore = totalResponses * 2;
             const questionScore = maxPossibleScore > 0 
                 ? (weightedSum / maxPossibleScore) * 100 
                 : 0;
@@ -1116,10 +1116,10 @@ async function generateReport(analysisData, facultyData) {
             let weightedSum = 0;
             let totalResponses = question.total_responses;
             question.options.forEach(option => {
-                const mappedValue = option.value === 1 ? 1 : option.value === 2 ? 3 : option.value === 3 ? 5 : option.value;
+                const mappedValue = option.value === 1 ? 0 : option.value === 2 ? 1 : option.value === 3 ? 2 : option.value;
                 weightedSum += option.count * mappedValue;
             });
-            const questionScore = (weightedSum / (totalResponses * 5)) * 100;
+            const questionScore = (weightedSum / (totalResponses * 2)) * 100;
 
             sortedOptions.forEach(option => {
                 const percentage = (option.count / question.total_responses) * 100;
@@ -1285,11 +1285,11 @@ async function generateDepartmentReport(filters, groupedData) {
                 let weightedSum = 0;
                 let totalResponses = 0;
                 (q.options || []).forEach(o => {
-                    const mapped = o.value === 1 ? 1 : o.value === 2 ? 3 : o.value === 3 ? 5 : o.value;
+                    const mapped = o.value === 1 ? 0 : o.value === 2 ? 1 : o.value === 3 ? 2 : o.value;
                     weightedSum += o.count * mapped;
                     totalResponses += o.count;
                 });
-                const maxScore = totalResponses * 5;
+                const maxScore = totalResponses * 2;
                 const qScore = maxScore > 0 ? (weightedSum / maxScore) * 100 : 0;
                 sectionScore += qScore;
                 qCount++;
