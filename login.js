@@ -388,6 +388,65 @@
 //     verifyOTP
 // };
 
+// const { createClient } = require('@supabase/supabase-js')
+// const dotenv = require('dotenv')
+// dotenv.config()
+
+// const supabase = createClient(
+//   process.env.SUPABASE_URL,
+//   process.env.SUPABASE_ANON_KEY,
+//   {
+//     auth: { persistSession: false }
+//   }
+// )
+
+// // SEND OTP (Supabase sends email automatically)
+// async function sendOTP(email) {
+//   if (!email) return { success: false, message: "Email is required" }
+
+//   const { data, error } = await supabase.auth.signInWithOtp({ email })
+
+//   if (error) {
+//     console.log("sendOTP error:", error)
+//     return { success: false, message: "Failed to send OTP" }
+//   }
+
+//   return { success: true, message: "OTP sent to your email" }
+// }
+
+// // VERIFY OTP
+// async function verifyOTP(email, otp) {
+//   const { data, error } = await supabase.auth.verifyOtp({
+//     email,
+//     token: otp,
+//     type: "email"
+//   })
+
+//   if (error) {
+//     console.log("verifyOTP error:", error)
+//     return { success: false, message: "Invalid OTP" }
+//   }
+
+//   // Get user profile from DB
+//   const { data: profile } = await supabase
+//     .from("profiles")
+//     .select("*")
+//     .eq("email", email)
+//     .single()
+
+//   return {
+//     success: true,
+//     message: "Login successful",
+//     user: profile
+//   }
+// }
+
+// module.exports = {
+//   sendOTP,
+//   verifyOTP
+// }
+
+
 const { createClient } = require('@supabase/supabase-js')
 const dotenv = require('dotenv')
 dotenv.config()
@@ -400,44 +459,132 @@ const supabase = createClient(
   }
 )
 
-// SEND OTP (Supabase sends email automatically)
+// SEND OTP - Only if email exists in profiles table
 async function sendOTP(email) {
-  if (!email) return { success: false, message: "Email is required" }
+  try {
+    // Validate input
+    if (!email) {
+      return { success: false, message: "Email is required" }
+    }
 
-  const { data, error } = await supabase.auth.signInWithOtp({ email })
+    // Normalize email
+    email = email.toLowerCase().trim()
 
-  if (error) {
-    console.log("sendOTP error:", error)
-    return { success: false, message: "Failed to send OTP" }
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(email)) {
+      return {
+        success: false,
+        message: 'Invalid email format'
+      }
+    }
+
+    // Check if email exists in profiles table
+    const { data: existingProfile, error: profileError } = await supabase
+      .from('profiles')
+      .select('id, email, name, role')
+      .eq('email', email)
+      .single()
+
+    if (profileError || !existingProfile) {
+      console.log(`Access denied for email: ${email} - Not found in profiles`)
+      return {
+        success: false,
+        message: 'Access denied. This email is not registered in the system. Please contact your administrator.'
+      }
+    }
+
+    console.log(`Email ${email} verified in profiles. User: ${existingProfile.name}, Role: ${existingProfile.role}`)
+
+    // Email exists - Send OTP via Supabase
+    const { data, error } = await supabase.auth.signInWithOtp({ email })
+
+    if (error) {
+      console.log("sendOTP error:", error)
+      return { 
+        success: false, 
+        message: "Failed to send OTP. Please try again." 
+      }
+    }
+
+    return { 
+      success: true, 
+      message: `OTP sent successfully to ${email}` 
+    }
+
+  } catch (error) {
+    console.error('Error in sendOTP:', error)
+    return {
+      success: false,
+      message: 'Failed to send OTP. Please try again.',
+      error: error.message
+    }
   }
-
-  return { success: true, message: "OTP sent to your email" }
 }
 
 // VERIFY OTP
 async function verifyOTP(email, otp) {
-  const { data, error } = await supabase.auth.verifyOtp({
-    email,
-    token: otp,
-    type: "email"
-  })
+  try {
+    // Normalize inputs
+    email = email.toLowerCase().trim()
+    otp = otp.trim()
 
-  if (error) {
-    console.log("verifyOTP error:", error)
-    return { success: false, message: "Invalid OTP" }
-  }
+    // Verify OTP with Supabase
+    const { data, error } = await supabase.auth.verifyOtp({
+      email,
+      token: otp,
+      type: "email"
+    })
 
-  // Get user profile from DB
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("*")
-    .eq("email", email)
-    .single()
+    if (error) {
+      console.log("verifyOTP error:", error)
+      return { 
+        success: false, 
+        message: error.message || "Invalid OTP" 
+      }
+    }
 
-  return {
-    success: true,
-    message: "Login successful",
-    user: profile
+    // Get user profile from DB
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("email", email)
+      .single()
+
+    if (profileError) {
+      console.error('Profile fetch error:', profileError)
+      // Return auth user data as fallback
+      return {
+        success: true,
+        message: "Login successful",
+        user: data.user,
+        session: data.session
+      }
+    }
+
+    // Update last_seen_at (optional)
+    await supabase
+      .from('profiles')
+      .update({
+        last_seen_at: new Date().toISOString()
+      })
+      .eq('id', profile.id)
+
+    return {
+      success: true,
+      message: "Login successful",
+      user: profile,
+      session: data.session,
+      access_token: data.session?.access_token
+    }
+
+  } catch (error) {
+    console.error('Error in verifyOTP:', error)
+    return {
+      success: false,
+      message: 'Verification failed. Please try again.',
+      error: error.message
+    }
   }
 }
 
