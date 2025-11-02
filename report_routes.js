@@ -82,13 +82,13 @@ router.post('/generate-department-report', async (req, res) => {
                 const analysis = await getFeedbackAnalysis(degree, dept, batch, code, staffId);
                 if (analysis && analysis.success) {
                     facultyAnalyses.push({
-    faculty_name: f.faculty_name || analysis.faculty_name || '',
-    staff_id: staffId,
-    analysisData: {
-        ...analysis,
-        batch: batch  // ADD THIS LINE - Pass the batch info
-    }
-});
+                        faculty_name: f.faculty_name || analysis.faculty_name || '',
+                        staff_id: staffId,
+                        analysisData: {
+                            ...analysis,
+                            batch: batch  // ADD THIS LINE - Pass the batch info
+                        }
+                    });
                 }
             }
             if (facultyAnalyses.length > 0) {
