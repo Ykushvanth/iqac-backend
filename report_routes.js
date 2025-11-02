@@ -82,10 +82,13 @@ router.post('/generate-department-report', async (req, res) => {
                 const analysis = await getFeedbackAnalysis(degree, dept, batch, code, staffId);
                 if (analysis && analysis.success) {
                     facultyAnalyses.push({
-                        faculty_name: f.faculty_name || analysis.faculty_name || '',
-                        staff_id: staffId,
-                        analysisData: analysis
-                    });
+    faculty_name: f.faculty_name || analysis.faculty_name || '',
+    staff_id: staffId,
+    analysisData: {
+        ...analysis,
+        batch: batch  // ADD THIS LINE - Pass the batch info
+    }
+});
                 }
             }
             if (facultyAnalyses.length > 0) {
@@ -111,6 +114,71 @@ router.post('/generate-department-report', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+
+// Generate department-wise report across all batches (no batch filter)
+// router.post('/generate-department-report-all-batches', async (req, res) => {
+//     try {
+//         const { degree, dept } = req.body || {};
+//         if (!degree || !dept) {
+//             return res.status(400).json({ error: 'Missing required fields: degree, dept' });
+//         }
+
+//         // Fetch all batches for the degree+dept
+//         const batches = await getDistinctBatches(degree, dept);
+//         if (!batches || batches.length === 0) {
+//             return res.status(404).json({ error: 'No batches found for selected degree and department' });
+//         }
+
+//         // Aggregate by course_code across batches
+//         const courseMap = new Map(); // course_code -> { course_code, course_name, faculties: [] }
+
+//         for (const batch of batches) {
+//             const courses = await getDistinctCourses(degree, dept, batch);
+//             if (!courses || courses.length === 0) continue;
+
+//             for (const course of courses) {
+//                 const code = course.code ? course.code : course;
+//                 const name = course.name || '';
+//                 const faculties = await getFacultyByFilters(degree, dept, batch, code, '');
+
+//                 for (const f of faculties) {
+//                     const staffId = f.staff_id || f.staffid || '';
+//                     const analysis = await getFeedbackAnalysis(degree, dept, batch, code, staffId);
+//                     if (analysis && analysis.success) {
+//                         const key = code;
+//                         if (!courseMap.has(key)) {
+//                             courseMap.set(key, {
+//                                 course_code: code,
+//                                 course_name: name || (analysis.course_name || ''),
+//                                 faculties: []
+//                             });
+//                         }
+//                         courseMap.get(key).faculties.push({
+//                             faculty_name: f.faculty_name || analysis.faculty_name || '',
+//                             staff_id: staffId,
+//                             analysisData: analysis
+//                         });
+//                     }
+//                 }
+//             }
+//         }
+
+//         const groupedData = Array.from(courseMap.values());
+//         if (groupedData.length === 0) {
+//             return res.status(404).json({ error: 'No analysis data available for selected filters' });
+//         }
+
+//         const workbook = await generateDepartmentReport({ degree, dept, batch: 'ALL' }, groupedData);
+//         const buffer = await workbook.xlsx.writeBuffer();
+//         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+//         res.setHeader('Content-Disposition', `attachment; filename=${dept}_department_report_all_batches.xlsx`);
+//         res.send(buffer);
+//     } catch (error) {
+//         console.error('Error generating all-batches department report:', error);
+//         res.status(500).json({ error: error.message });
+//     }
+// });
+
 
 // Generate department-wise report across all batches (no batch filter)
 router.post('/generate-department-report-all-batches', async (req, res) => {
@@ -153,7 +221,10 @@ router.post('/generate-department-report-all-batches', async (req, res) => {
                         courseMap.get(key).faculties.push({
                             faculty_name: f.faculty_name || analysis.faculty_name || '',
                             staff_id: staffId,
-                            analysisData: analysis
+                            analysisData: {
+                                ...analysis,
+                                batch: batch  // ADD THIS LINE - Pass the batch info
+                            }
                         });
                     }
                 }
