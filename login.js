@@ -479,28 +479,29 @@ async function sendOTP(email) {
       }
     }
 
-    // Check if email exists in profiles table
+    // ⭐ FIRST: Check if email exists in profiles table
     const { data: existingProfile, error: profileError } = await supabase
       .from('profiles')
       .select('id, email, name, role')
       .eq('email', email)
       .single()
 
+    // ⭐ If email NOT found in profiles - STOP and return error
     if (profileError || !existingProfile) {
       console.log(`Access denied for email: ${email} - Not found in profiles`)
       return {
         success: false,
-        message: 'Access denied. This email is not registered in the system. Please contact your administrator.'
+        message: 'This email is not registered in the system. Please contact your administrator.'
       }
     }
 
-    console.log(`Email ${email} verified in profiles. User: ${existingProfile.name}, Role: ${existingProfile.role}`)
+    // ⭐ Email exists in profiles - NOW send OTP
+    console.log(`Email verified: ${existingProfile.name} (${existingProfile.role})`)
 
-    // Email exists - Send OTP via Supabase
     const { data, error } = await supabase.auth.signInWithOtp({ email })
 
     if (error) {
-      console.log("sendOTP error:", error)
+      console.log("Supabase OTP error:", error)
       return { 
         success: false, 
         message: "Failed to send OTP. Please try again." 
@@ -509,15 +510,14 @@ async function sendOTP(email) {
 
     return { 
       success: true, 
-      message: `OTP sent successfully to ${email}` 
+      message: `OTP sent to ${email}` 
     }
 
   } catch (error) {
     console.error('Error in sendOTP:', error)
     return {
       success: false,
-      message: 'Failed to send OTP. Please try again.',
-      error: error.message
+      message: 'Failed to send OTP. Please try again.'
     }
   }
 }
@@ -540,7 +540,7 @@ async function verifyOTP(email, otp) {
       console.log("verifyOTP error:", error)
       return { 
         success: false, 
-        message: error.message || "Invalid OTP" 
+        message: "Invalid or expired OTP" 
       }
     }
 
@@ -553,21 +553,16 @@ async function verifyOTP(email, otp) {
 
     if (profileError) {
       console.error('Profile fetch error:', profileError)
-      // Return auth user data as fallback
       return {
-        success: true,
-        message: "Login successful",
-        user: data.user,
-        session: data.session
+        success: false,
+        message: "Profile not found"
       }
     }
 
-    // Update last_seen_at (optional)
+    // Update last_seen_at
     await supabase
       .from('profiles')
-      .update({
-        last_seen_at: new Date().toISOString()
-      })
+      .update({ last_seen_at: new Date().toISOString() })
       .eq('id', profile.id)
 
     return {
@@ -582,8 +577,7 @@ async function verifyOTP(email, otp) {
     console.error('Error in verifyOTP:', error)
     return {
       success: false,
-      message: 'Verification failed. Please try again.',
-      error: error.message
+      message: 'Verification failed. Please try again.'
     }
   }
 }
