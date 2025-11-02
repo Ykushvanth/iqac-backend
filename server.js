@@ -509,7 +509,7 @@ const cors = require('cors');
 const fileUpload = require('express-fileupload');
 const path = require('path');
 const dotenv = require('dotenv');
-const FRONTEND_APP_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
+const FRONTEND_APP_URL = process.env.FRONTEND_URL || 'https://iqac-frontend-rho.vercel.app';
 const { handleFileUpload } = require('./uplod_file_backend');
 
 const { 
