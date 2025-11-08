@@ -23,6 +23,33 @@ function cleanString(value) {
     return cleaned;
 }
 
+function normalizeFilterValue(value) {
+    if (value === undefined || value === null) {
+        return null;
+    }
+    const cleaned = value.toString().trim();
+    if (!cleaned) {
+        return null;
+    }
+    const upper = cleaned.toUpperCase();
+    if (
+        upper === 'ALL' ||
+        upper === 'ALL BATCHES' ||
+        upper === 'ALL COURSES' ||
+        upper === 'ALL DEPARTMENTS' ||
+        upper === 'ALL DEPTS' ||
+        upper === 'ALL FACULTY' ||
+        upper === 'SELECT BATCH' ||
+        upper === 'SELECT DEGREE' ||
+        upper === 'SELECT DEPARTMENT' ||
+        upper === 'SELECT COURSE' ||
+        upper === 'NA'
+    ) {
+        return null;
+    }
+    return cleaned;
+}
+
 // Generic pagination fetcher
 async function fetchAllRows(queryBuilder, chunkSize = 1000) {
     let from = 0;
@@ -46,19 +73,32 @@ async function fetchAllRows(queryBuilder, chunkSize = 1000) {
     return allData;
 }
 
-// Get feedback data based on filters
+// Get feedback data based on filters - matches course_code and staffId for faculty-specific analysis
 const getFeedbackAnalysis = async (degree, department, batch, courseCode, staffId) => {
     try {
-        console.log(`\n=== Fetching Feedback Analysis ===`);
-        console.log(`Degree: ${degree}`);
-        console.log(`Department: ${department}`);
-        console.log(`Batch: ${batch}`);
-        console.log(`Course: ${courseCode}`);
+        console.log(`\n=== Fetching Feedback Analysis for Selected Faculty ===`);
+        console.log(`Degree: ${degree || 'N/A'}`);
+        console.log(`Department: ${department || 'N/A'}`);
+        console.log(`Batch: ${batch || 'N/A'}`);
+        console.log(`Course Code: ${courseCode}`);
         console.log(`Staff ID: ${staffId || 'N/A'}`);
 
-        // Get the feedback data WITHOUT exact course_code match
-        // We'll filter manually to handle trailing spaces
-        // Build query with explicit column selection
+        // Primary match: course_code (links course_allocation to course_feedback)
+        // StaffId is REQUIRED for faculty-specific analysis
+        if (!staffId || staffId.trim() === '') {
+            return { 
+                success: false, 
+                message: 'Staff ID is required for faculty-specific feedback analysis' 
+            };
+        }
+
+        const cleanedCourseCode = courseCode.trim();
+        const trimmedStaffId = staffId.trim();
+        const cleanedDegree = normalizeFilterValue(degree);
+        const cleanedDept = normalizeFilterValue(department);
+        const cleanedBatch = normalizeFilterValue(batch);
+
+        // Build query - match primarily by course_code and staffId (filter at DB level)
         let query = supabase
             .from('course_feedback')
             .select(`
@@ -68,66 +108,70 @@ const getFeedbackAnalysis = async (degree, department, batch, courseCode, staffI
                 staff_id,
                 staffid,
                 course_code,
-                course_name
+                course_name,
+                degree,
+                dept,
+                batch
             `)
-            .eq('degree', degree)
-            .eq('dept', department)
-            .eq('batch', batch)
-            .not('course_code', 'is', null);
+            .like('course_code', `${cleanedCourseCode}%`)
+            .or(`staff_id.eq.${trimmedStaffId},staffid.eq.${trimmedStaffId}`);
+
+        // Optional filters for better accuracy
+        if (cleanedDegree) {
+            query = query.ilike('degree', `${cleanedDegree}%`);
+        }
             
         console.log('Querying feedback data with filters:', {
-            degree,
-            department,
-            batch,
-            courseCode: courseCode.trim(),
-            staffId: staffId || 'N/A'
+            degree: degree || 'all',
+            batch: batch || 'all',
+            courseCode: cleanedCourseCode,
+            staffId: trimmedStaffId
         });
 
         const allData = await fetchAllRows(query);
-        console.log(`Raw data fetched: ${allData.length} rows`);
+        console.log(`Raw data fetched from course_feedback: ${allData.length} rows`);
 
         if (allData.length === 0) {
-            return { success: false, message: 'No data found for the selected degree, department, and batch' };
+            return { 
+                success: false, 
+                message: 'No feedback data found in course_feedback table' 
+            };
         }
 
-        // Filter by course_code manually (to handle trailing spaces)
-        // Also apply staff ID filter if provided
-        const cleanedCourseCode = courseCode.trim();
+        // Already DB-filtered; keep a defensive filter
         const feedbackData = allData.filter(item => {
             const itemCourseCode = cleanString(item.course_code);
-            
-            // Check if course code matches (trimmed comparison)
-            if (itemCourseCode !== cleanedCourseCode) {
-                return false;
-            }
-
-            // If staff ID filter is provided, check it
-            if (staffId && staffId.trim() !== '') {
-                const trimmedIdFilter = staffId.trim();
-                const itemStaffId = cleanString(item.staff_id);
-                const itemStaffid = cleanString(item.staffid);
-                
-                // Return true if either staff_id or staffid matches
-                return itemStaffId === trimmedIdFilter || itemStaffid === trimmedIdFilter;
-            }
-
-            return true;
+            const cc = (itemCourseCode || '').toUpperCase();
+            const target = cleanedCourseCode.toUpperCase();
+            if (!cc.startsWith(target)) return false;
+            const itemStaffId = cleanString(item.staff_id);
+            const itemStaffid = cleanString(item.staffid);
+            return (itemStaffId === trimmedStaffId || itemStaffid === trimmedStaffId);
         });
 
-        console.log(`Filtered feedback data: ${feedbackData.length} rows`);
+        console.log(`Filtered feedback data after course_code and staffId match: ${feedbackData.length} rows`);
         
         if (!feedbackData || feedbackData.length === 0) {
-            console.log('⚠️ No feedback data found after filtering');
+            console.log('⚠️ No feedback data found after filtering by course_code and staffId');
             console.log('Debug - Sample course codes in database:');
             const sampleCodes = allData.slice(0, 5).map(item => ({
                 course_code: item.course_code,
-                trimmed: cleanString(item.course_code),
-                length: item.course_code?.length,
-                searching_for: cleanedCourseCode
+                staff_id: item.staff_id,
+                staffid: item.staffid,
+                trimmed_course_code: cleanString(item.course_code),
+                searching_for: {
+                    course_code: cleanedCourseCode,
+                    staff_id: trimmedStaffId
+                }
             }));
             console.log(sampleCodes);
-            return { success: false, message: 'No feedback data found for the selected filters' };
+            return { 
+                success: false, 
+                message: `No student feedback found for course ${cleanedCourseCode} and staff ID ${trimmedStaffId}` 
+            };
         }
+
+        console.log(`✓ Found ${feedbackData.length} student responses for this faculty and course`);
 
         // Get all questions with their column names
         const { data: questions, error: questionsError } = await supabase
@@ -414,7 +458,7 @@ const getFeedbackAnalysis = async (degree, department, batch, courseCode, staffI
         
         // Get comments for this faculty
         console.log(`Fetching comments...`);
-        const commentsResult = await getFacultyComments(degree, department, batch, courseCode, staffId);
+        const commentsResult = await getFacultyComments(cleanedDegree || degree, cleanedDept || department, cleanedBatch || batch, courseCode, staffId);
         console.log(`✓ Comments fetched: ${commentsResult.success ? commentsResult.total_comments : 0}`);
         
         console.log(`✓ Analysis complete: ${feedbackData.length} responses analyzed`);
@@ -467,78 +511,139 @@ const getFacultyComments = async (degree, department, batch, courseCode, staffId
     try {
         console.log(`Fetching comments for: ${degree}, ${department}, ${batch}, ${courseCode}, ${staffId || 'N/A'}`);
         
-        // Get comments WITHOUT exact course_code match
-        // We'll filter manually to handle trailing spaces
+        // Primary match: course_code (links course_allocation to course_feedback)
+        // Filter by course_code and staffId, optionally by degree and batch
+        const cleanedCourseCode = courseCode.trim();
+        const trimmedStaffId = staffId && staffId.trim() !== '' ? staffId.trim() : null;
+        const cleanedDegree = normalizeFilterValue(degree);
+        const cleanedDept = normalizeFilterValue(department);
+        const cleanedBatch = normalizeFilterValue(batch);
+        const cleanedCgpa = normalizeFilterValue(cgpa);
+        
+        // Staff ID is REQUIRED for faculty-specific analysis
+        if (!trimmedStaffId) {
+            return { 
+                success: false, 
+                message: 'Staff ID is required for faculty-specific comments analysis' 
+            };
+        }
+
+        // Build query - PRIMARY FILTERS: course_code and staff_id/staffid ONLY (DB-side)
+        // Do NOT filter by batch - get ALL comments for this course_code and staffId across all batches
+        console.log(`\n=== Querying course_feedback with PRIMARY filters ===`);
+        console.log(`Course Code: ${cleanedCourseCode}`);
+        console.log(`Staff ID: ${trimmedStaffId}`);
+        console.log(`Batch: NOT FILTERED (fetching from ALL batches)`);
+        
+        // Since Supabase doesn't support OR conditions easily for staff_id OR staffid,
+        // we'll fetch matching course_code first, then filter by staffId in memory
+        // This ensures we get all comments for this course_code and staffId combination across ALL batches
         let query = supabase
             .from('course_feedback')
-            .select('comment, faculty_name, staff_id, staffid, course_code, course_name, qn1')
-            .eq('degree', degree)
-            .eq('dept', department)
-            .eq('batch', batch)
-            .not('course_code', 'is', null)
+            .select('comment, faculty_name, staff_id, staffid, course_code, course_name, qn1, degree, dept, batch')
+            .like('course_code', `${cleanedCourseCode}%`)
+            .or(`staff_id.eq.${trimmedStaffId},staffid.eq.${trimmedStaffId}`)
             .not('comment', 'is', null);
+
+        // Optional filter: degree only (if provided)
+        if (cleanedDegree) {
+            query = query.ilike('degree', `${cleanedDegree}%`);
+            console.log(`Additional filter: degree ~= ${cleanedDegree}`);
+        }
+        if (cleanedDept) {
+            console.log(`Skipping strict dept filter to keep cross-department feedback (requested: ${cleanedDept})`);
+        }
+        if (cleanedBatch) {
+            console.log(`Skipping strict batch filter to keep multi-batch feedback (requested: ${cleanedBatch})`);
+        }
         
+        // NOTE: Batch is NOT filtered - we want comments from ALL batches for this faculty/course
+        
+        // Fetch all data matching the base filters
         const allData = await fetchAllRows(query);
+        console.log(`Raw data fetched from course_feedback: ${allData.length} rows`);
         
         if (allData.length === 0) {
             return { 
                 success: false, 
-                message: 'No data found for the selected filters'
+                message: 'No feedback data found in course_feedback table'
             };
         }
 
-        // Filter by course_code, staff_id and optionally cgpa manually
-        const cleanedCourseCode = courseCode.trim();
+        // Data is already DB-filtered; apply optional CGPA filter only
+        console.log(`\n=== Applying optional CGPA filter (if any) ===`);
         const commentsData = allData.filter(item => {
-            const itemCourseCode = cleanString(item.course_code);
-            
-            // Check if course code matches
-            if (itemCourseCode !== cleanedCourseCode) {
-                return false;
-            }
-
-            // If staff ID filter is provided, check it
-            if (staffId && staffId.trim() !== '') {
-                const trimmedIdFilter = staffId.trim();
-                const itemStaffId = cleanString(item.staff_id);
-                const itemStaffid = cleanString(item.staffid);
-                if (!(itemStaffId === trimmedIdFilter || itemStaffid === trimmedIdFilter)) {
-                    return false;
-                }
-            }
-
-            // If cgpa filter provided and it's not "all", check qn1 field
-            if (cgpa && cgpa.toString().trim() !== '' && cgpa.toString().trim() !== 'all') {
+            if (cleanedCgpa && cleanedCgpa.toLowerCase() !== 'all') {
                 const itemCgpa = item.qn1 !== undefined ? item.qn1 : (item['qn1'] !== undefined ? item['qn1'] : null);
                 if (itemCgpa === null || itemCgpa === undefined) return false;
-                if (String(itemCgpa).trim() !== String(cgpa).trim()) return false;
+                if (String(itemCgpa).trim() !== cleanedCgpa) return false;
             }
-
             return true;
         });
         
-        console.log(`Database query returned ${commentsData.length} rows with comments`);
+        console.log(`✓ Filtered comments by course_code (${cleanedCourseCode}) + staffId (${trimmedStaffId}): ${commentsData.length} rows`);
+        
+        // Log sample of matched records for verification
+        if (commentsData.length > 0) {
+            console.log('Sample matched records:');
+            commentsData.slice(0, 3).forEach((item, idx) => {
+                console.log(`  ${idx + 1}. Course: ${item.course_code}, StaffId: ${item.staff_id || item.staffid}, Comment: ${item.comment?.substring(0, 50)}...`);
+            });
+        }
         
         if (!commentsData || commentsData.length === 0) {
-            console.log('No comments found after filtering');
+            console.log('No comments found after filtering by course_code and staffId');
             return { 
                 success: false, 
-                message: 'No comments found for the selected filters'
+                message: 'No comments found for the selected faculty and course'
             };
         }
         
+        // Extract and validate comments - ensure we get all comments for this faculty and course
         const validComments = commentsData
-            .map(item => item.comment?.trim())
-            .filter(comment => comment && comment.length > 0 && comment !== '' && comment.split(' ').length > 1);
+            .map(item => {
+                const comment = item.comment?.trim();
+                return comment;
+            })
+            .filter(comment => {
+                // Filter out empty, null, or single-word comments
+                return comment && 
+                       comment.length > 0 && 
+                       comment !== '' && 
+                       comment.split(/\s+/).length > 1;
+            });
+        
+        console.log(`Valid comments extracted: ${validComments.length} out of ${commentsData.length} total comments`);
+        
+        // Log sample comments for debugging
+        if (validComments.length > 0) {
+            console.log(`Sample comments (first 3):`, validComments.slice(0, 3));
+        } else {
+            console.warn('⚠️ No valid comments found after filtering');
+            console.log('Sample raw comments:', commentsData.slice(0, 3).map(item => ({
+                comment: item.comment,
+                length: item.comment?.length,
+                wordCount: item.comment?.split(/\s+/).length
+            })));
+        }
+        
+        // Get faculty info from first matching record
+        const facultyInfo = commentsData[0] || {};
         
         return {
             success: true,
-            faculty_name: commentsData[0].faculty_name || '',
-            staff_id: commentsData[0].staff_id || commentsData[0].staffid || '',
-            course_code: commentsData[0].course_code || '',
-            course_name: commentsData[0].course_name || '',
+            faculty_name: facultyInfo.faculty_name || '',
+            staff_id: facultyInfo.staff_id || facultyInfo.staffid || '',
+            course_code: facultyInfo.course_code || cleanedCourseCode,
+            course_name: facultyInfo.course_name || '',
             total_comments: validComments.length,
-            comments: validComments
+            comments: validComments,
+            debug: {
+                total_rows: commentsData.length,
+                valid_comments_count: validComments.length,
+                course_code: cleanedCourseCode,
+                staff_id: trimmedStaffId
+            }
         };
     } catch (error) {
         console.error('Error in getFacultyComments:', error);

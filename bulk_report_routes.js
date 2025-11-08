@@ -2,6 +2,18 @@ const express = require("express");
 const router = express.Router();
 const ExcelJS = require('exceljs');
 
+const EXCLUDED_SECTIONS = new Set([
+    'COURSE CONTENT AND STRUCTURE',
+    'STUDENT-CENTRIC FACTORS'
+]);
+
+const normalizeSectionName = (sectionKey, section) => ((section && section.section_name) || sectionKey || '')
+    .toString()
+    .trim()
+    .toUpperCase();
+
+const isExcludedSection = (sectionKey, section) => EXCLUDED_SECTIONS.has(normalizeSectionName(sectionKey, section));
+
 async function generateBulkReport(facultyAnalyses, filters) {
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'IQAC Feedback System';
@@ -29,10 +41,12 @@ async function generateBulkReport(facultyAnalyses, filters) {
     const allSections = [];
     if (facultyAnalyses.length > 0 && facultyAnalyses[0].analysisData.analysis) {
         Object.entries(facultyAnalyses[0].analysisData.analysis).forEach(([key, section]) => {
-            allSections.push({
-                key: key,
-                name: section.section_name || key
-            });
+            if (!isExcludedSection(key, section)) {
+                allSections.push({
+                    key: key,
+                    name: section.section_name || key
+                });
+            }
         });
     }
 
@@ -76,6 +90,9 @@ async function generateBulkReport(facultyAnalyses, filters) {
 
         // Calculate section scores for ALL sections
         Object.entries(analysisData.analysis || {}).forEach(([key, section]) => {
+            if (isExcludedSection(key, section)) {
+                return;
+            }
             let sectionScore = 0;
             let questionCount = 0;
 
