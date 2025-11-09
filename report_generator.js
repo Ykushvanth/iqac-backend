@@ -1353,11 +1353,40 @@ async function generateSchoolReport(school, filters, groupedDataByDept) {
         // Get the department sheet from temp workbook
         const deptSheet = tempWorkbook.getWorksheet('Department Report');
         if (deptSheet) {
+            // Get section groups info to recreate merged headings
+            const findFirstAnalysis = () => {
+                for (const course of groupedData) {
+                    for (const f of course.faculties) {
+                        if (f.analysisData && f.analysisData.analysis) return f.analysisData;
+                    }
+                }
+                return null;
+            };
+            
+            const first = findFirstAnalysis();
+            const sectionGroups = [];
+            const courseDetailHeaders = [
+                'Dept', 'Degree', 'UG_or_PG', 'Arts_or_Engg', 'Short_Form',
+                'Course_Code', 'Course_Name', 'Batch', 'Staff_id', 'Faculty_Name'
+            ];
+            
+            if (first && first.analysis) {
+                Object.entries(first.analysis).forEach(([key, section]) => {
+                    const questions = Object.values(section.questions || {});
+                    const count = questions.length;
+                    sectionGroups.push({ title: section.section_name || key, count });
+                });
+            }
+            
             // Rename and add to main workbook
             const newSheet = workbook.addWorksheet(dept.substring(0, 31)); // Excel sheet name limit
+            let sectionHeadingRowNumber = null;
+            
             // Copy all rows from deptSheet to newSheet
             deptSheet.eachRow((row, rowNumber) => {
                 const newRow = newSheet.addRow([]);
+                let isSectionHeadingRow = false;
+                
                 row.eachCell((cell, colNumber) => {
                     const newCell = newRow.getCell(colNumber);
                     newCell.value = cell.value;
@@ -1365,8 +1394,45 @@ async function generateSchoolReport(school, filters, groupedDataByDept) {
                     if (cell.formula) {
                         newCell.formula = cell.formula;
                     }
+                    
+                    // Check if this row contains section headings (has section names in question columns)
+                    if (colNumber > courseDetailHeaders.length && cell.value && typeof cell.value === 'string') {
+                        const sectionTitles = sectionGroups.map(g => g.title);
+                        if (sectionTitles.includes(cell.value)) {
+                            isSectionHeadingRow = true;
+                        }
+                    }
                 });
+                
+                if (isSectionHeadingRow && !sectionHeadingRowNumber) {
+                    sectionHeadingRowNumber = newRow.number;
+                }
             });
+            
+            // Recreate merged cells for section headings
+            if (sectionHeadingRowNumber && sectionGroups.length > 0) {
+                const questionStartCol = courseDetailHeaders.length + 1;
+                let colPointer = questionStartCol;
+                
+                sectionGroups.forEach(g => {
+                    const startCol = colPointer;
+                    const endCol = startCol + Math.max(g.count - 1, 0);
+                    try {
+                        newSheet.mergeCells(sectionHeadingRowNumber, startCol, sectionHeadingRowNumber, endCol);
+                        const cell = newSheet.getRow(sectionHeadingRowNumber).getCell(startCol);
+                        cell.font = { bold: true };
+                        cell.alignment = { horizontal: 'center' };
+                        cell.fill = {
+                            type: 'pattern',
+                            pattern: 'solid',
+                            fgColor: { argb: 'FFE6E6FA' }
+                        };
+                    } catch (e) {
+                        console.warn(`Could not merge cells for section ${g.title} in department ${dept}:`, e.message);
+                    }
+                    colPointer = endCol + 1;
+                });
+            }
             
             // Copy column widths
             deptSheet.columns.forEach((col, idx) => {
