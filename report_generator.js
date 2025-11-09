@@ -1303,4 +1303,81 @@ async function generateDepartmentReport(filters, groupedData) {
     return workbook;
 }
 
-module.exports = { generateReport, generateDepartmentReport };
+// Generate school-wise report (multiple departments in one file)
+// groupedDataByDept: Map of department -> groupedData (same structure as generateDepartmentReport)
+async function generateSchoolReport(school, filters, groupedDataByDept) {
+    const ExcelJS = require('exceljs');
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'IQAC Feedback System';
+    workbook.lastModifiedBy = 'IQAC Feedback System';
+    workbook.created = new Date();
+    workbook.modified = new Date();
+
+    // Add School Info Sheet
+    const infoSheet = workbook.addWorksheet('School Information');
+    infoSheet.addRow(['School-wise Feedback Analysis Report']);
+    infoSheet.addRow(['']);
+    infoSheet.addRow(['School', school]);
+    infoSheet.addRow(['Total Departments', Object.keys(groupedDataByDept).length]);
+    infoSheet.addRow(['Generated Date', new Date().toLocaleString()]);
+    infoSheet.addRow(['']);
+    
+    // Format Info Sheet
+    infoSheet.getCell('A1').font = { size: 16, bold: true };
+    infoSheet.getColumn('A').width = 20;
+    infoSheet.getColumn('B').width = 40;
+
+    // Add department list
+    infoSheet.addRow(['Departments Included:']);
+    infoSheet.getRow(infoSheet.rowCount).font = { bold: true };
+    Object.keys(groupedDataByDept).sort().forEach((dept, idx) => {
+        infoSheet.addRow([`${idx + 1}.`, dept]);
+    });
+
+    // Generate a sheet for each department using the existing generateDepartmentReport logic
+    const departmentNames = Object.keys(groupedDataByDept).sort();
+    
+    for (const dept of departmentNames) {
+        const groupedData = groupedDataByDept[dept];
+        if (!groupedData || groupedData.length === 0) {
+            console.log(`Skipping empty department: ${dept}`);
+            continue;
+        }
+
+        // Create a temporary workbook to get the department sheet structure
+        const tempWorkbook = await generateDepartmentReport(
+            { degree: filters.degree || '', dept: dept, batch: filters.batch || 'ALL' },
+            groupedData
+        );
+        
+        // Get the department sheet from temp workbook
+        const deptSheet = tempWorkbook.getWorksheet('Department Report');
+        if (deptSheet) {
+            // Rename and add to main workbook
+            const newSheet = workbook.addWorksheet(dept.substring(0, 31)); // Excel sheet name limit
+            // Copy all rows from deptSheet to newSheet
+            deptSheet.eachRow((row, rowNumber) => {
+                const newRow = newSheet.addRow([]);
+                row.eachCell((cell, colNumber) => {
+                    const newCell = newRow.getCell(colNumber);
+                    newCell.value = cell.value;
+                    newCell.style = cell.style;
+                    if (cell.formula) {
+                        newCell.formula = cell.formula;
+                    }
+                });
+            });
+            
+            // Copy column widths
+            deptSheet.columns.forEach((col, idx) => {
+                if (col.width) {
+                    newSheet.getColumn(idx + 1).width = col.width;
+                }
+            });
+        }
+    }
+
+    return workbook;
+}
+
+module.exports = { generateReport, generateDepartmentReport, generateSchoolReport };
