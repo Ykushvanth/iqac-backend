@@ -25,23 +25,44 @@ function cleanString(value) {
 const getDistinctSchools = async () => {
     try {
         console.log('Fetching all schools from profiles table...');
+        console.log('Supabase URL:', process.env.SUPABASE_URL ? 'Set' : 'NOT SET');
+        
+        // First, test if we can access the profiles table
+        const { data: testData, error: testError } = await supabase
+            .from('profiles')
+            .select('school')
+            .limit(1);
+            
+        if (testError) {
+            console.error('❌ Cannot access profiles table:', testError);
+            console.error('Error code:', testError.code);
+            console.error('Error message:', testError.message);
+            console.error('Error details:', testError.details);
+            throw new Error(`Cannot access profiles table: ${testError.message || 'Database connection error'}`);
+        }
+        
+        console.log('✓ Successfully connected to profiles table');
+        
+        // Now fetch all schools
         const { data, error } = await supabase
             .from('profiles')
             .select('school')
             .not('school', 'is', null);
 
         if (error) {
-            console.error('Supabase error fetching schools:', error);
-            console.error('Error details:', JSON.stringify(error, null, 2));
+            console.error('❌ Supabase error fetching schools:', error);
+            console.error('Error code:', error.code);
+            console.error('Error message:', error.message);
+            console.error('Error details:', error.details);
             throw new Error(`Database error: ${error.message || 'Failed to fetch schools from profiles table'}`);
         }
 
         if (!data) {
-            console.warn('No data returned from profiles table');
+            console.warn('⚠️ No data returned from profiles table');
             return [];
         }
 
-        console.log(`Raw data from profiles: ${data.length} rows`);
+        console.log(`✓ Raw data from profiles: ${data.length} rows`);
 
         const uniqueSchools = [...new Set(
             (data || [])
@@ -49,7 +70,7 @@ const getDistinctSchools = async () => {
                 .filter(school => school !== null)
         )].sort((a, b) => a.localeCompare(b));
 
-        console.log('Processed unique schools:', uniqueSchools.length, 'schools');
+        console.log(`✓ Processed unique schools: ${uniqueSchools.length} schools`);
         if (uniqueSchools.length > 0) {
             console.log('Sample schools:', uniqueSchools.slice(0, 5));
         } else {
@@ -57,7 +78,8 @@ const getDistinctSchools = async () => {
         }
         return uniqueSchools;
     } catch (error) {
-        console.error('Error in getDistinctSchools:', error);
+        console.error('❌ Error in getDistinctSchools:', error);
+        console.error('Error stack:', error.stack);
         throw error;
     }
 };

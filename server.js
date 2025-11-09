@@ -53,8 +53,10 @@ app.use(fileUpload());
 // Report routes
 const reportRoutes = require('./report_routes');
 const bulkReportRoutes = require('./bulk_report_routes');
+const schoolWiseReportRoutes = require('./school_wise_report_routes');
 app.use('/api/reports', reportRoutes);
 app.use('/api/bulk-reports', bulkReportRoutes);
+app.use('/api/school-reports', schoolWiseReportRoutes);
 
 // Test route
 app.get('/test', (req, res) => {

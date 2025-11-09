@@ -101,11 +101,17 @@ const isExcludedSection = (sectionKey, section) => EXCLUDED_SECTIONS.has(normali
 // Get all schools
 router.get('/schools', async (req, res) => {
     try {
+        console.log('=== GET /api/school-reports/schools endpoint called ===');
         const schools = await getDistinctSchools();
+        console.log(`✓ Successfully fetched ${schools.length} schools`);
         res.json(schools);
     } catch (error) {
-        console.error('Error fetching schools:', error);
-        res.status(500).json({ error: error.message });
+        console.error('❌ Error fetching schools:', error);
+        console.error('Error stack:', error.stack);
+        res.status(500).json({ 
+            error: error.message || 'Failed to fetch schools',
+            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
     }
 });
 
