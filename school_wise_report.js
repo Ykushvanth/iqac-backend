@@ -31,9 +31,17 @@ const getDistinctSchools = async () => {
             .not('school', 'is', null);
 
         if (error) {
-            console.error('Error fetching schools:', error);
-            throw error;
+            console.error('Supabase error fetching schools:', error);
+            console.error('Error details:', JSON.stringify(error, null, 2));
+            throw new Error(`Database error: ${error.message || 'Failed to fetch schools from profiles table'}`);
         }
+
+        if (!data) {
+            console.warn('No data returned from profiles table');
+            return [];
+        }
+
+        console.log(`Raw data from profiles: ${data.length} rows`);
 
         const uniqueSchools = [...new Set(
             (data || [])
@@ -42,6 +50,11 @@ const getDistinctSchools = async () => {
         )].sort((a, b) => a.localeCompare(b));
 
         console.log('Processed unique schools:', uniqueSchools.length, 'schools');
+        if (uniqueSchools.length > 0) {
+            console.log('Sample schools:', uniqueSchools.slice(0, 5));
+        } else {
+            console.warn('⚠️ No schools found in profiles table. Make sure the profiles table has school data.');
+        }
         return uniqueSchools;
     } catch (error) {
         console.error('Error in getDistinctSchools:', error);
