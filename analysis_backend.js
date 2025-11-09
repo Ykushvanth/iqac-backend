@@ -757,7 +757,58 @@ const getDistinctBatches = async (degree, department) => {
     }
 };
 
-// 4c. Get CGPA-wise breakdown for a specific faculty+course (uses qn1 as CGPA)
+// 4c. Get unique degrees from course_feedback for a specific faculty+course combination
+const getDegreesForFacultyCourse = async (courseCode, staffId) => {
+    try {
+        const cleanedCourseCode = courseCode.trim();
+        const trimmedStaffId = staffId.trim();
+        
+        console.log(`\n=== Getting unique degrees for faculty+course ===`);
+        console.log(`Course Code: ${cleanedCourseCode}`);
+        console.log(`Staff ID (staffid): ${trimmedStaffId}`);
+        
+        // Query course_feedback for degrees matching course_code (prioritize staffid matching)
+        // No degree filter - get all degrees for this course_code and staffid
+        let query = supabase
+            .from('course_feedback')
+            .select('degree, staff_id, staffid')
+            .like('course_code', `${cleanedCourseCode}%`)
+            .or(`staff_id.eq.${trimmedStaffId},staffid.eq.${trimmedStaffId}`)
+            .not('degree', 'is', null);
+        
+        const allData = await fetchAllRows(query);
+        console.log(`Raw degree data from course_feedback: ${allData.length} rows`);
+        
+        if (allData.length === 0) {
+            return [];
+        }
+        
+        // Already filtered in DB; keep a defensive filter
+        const filteredData = allData.filter(item => {
+            const itemStaffid = cleanString(item.staffid);
+            const itemStaffId = cleanString(item.staff_id);
+            return itemStaffid === trimmedStaffId || itemStaffId === trimmedStaffId;
+        });
+        
+        console.log(`Filtered data after staffid match: ${filteredData.length} rows`);
+        
+        // Get unique degrees
+        const uniqueDegrees = [...new Set(
+            filteredData
+                .map(item => cleanString(item.degree))
+                .filter(degree => degree !== null && degree !== '')
+        )].sort((a, b) => a.localeCompare(b));
+        
+        console.log(`✓ Found ${uniqueDegrees.length} unique degrees for this faculty+course`);
+        
+        return uniqueDegrees;
+    } catch (error) {
+        console.error('❌ Error in getDegreesForFacultyCourse:', error);
+        return [];
+    }
+};
+
+// 4d. Get CGPA-wise breakdown for a specific faculty+course (uses qn1 as CGPA)
 const getCgpaBreakdownForFacultyCourse = async (courseCode, staffId) => {
     try {
         const cleanedCourseCode = courseCode.trim();
@@ -812,6 +863,7 @@ module.exports = {
     getFacultyByCourse,
     getFacultyFromCourseAllocation,
     getBatchesForFacultyCourse,
+    getDegreesForFacultyCourse,
     getCgpaBreakdownForFacultyCourse,
     // Keep old function name for backward compatibility with reports
     getFacultyByFilters: getFacultyByCourse

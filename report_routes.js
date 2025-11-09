@@ -1,9 +1,10 @@
 ﻿const express = require("express");
 const router = express.Router();
-const { generateReport, generateDepartmentReport } = require("./report_generator");
-const { generateDepartmentPdf } = require('./pdf_report');
-const { getDistinctCourses, getFacultyByFilters, getDistinctBatches, getBatchesForFacultyCourse, getCgpaBreakdownForFacultyCourse } = require('./analysis_backend');
-const { getFeedbackAnalysis } = require('./performance_analysis');
+const { generateReport, generateDepartmentReport, generateDepartmentNegativeCommentsExcel } = require("./report_generator");
+const { generateDepartmentPdf, generateDepartmentNegativeCommentsPdf } = require('./pdf_report');
+const { getDistinctCourses, getFacultyByFilters, getDistinctBatches, getBatchesForFacultyCourse, getDegreesForFacultyCourse, getCgpaBreakdownForFacultyCourse } = require('./analysis_backend');
+const { getFeedbackAnalysis, getFacultyComments } = require('./performance_analysis');
+const fastapiService = require('./fastapi_service');
 
 const EXCLUDED_SECTIONS = new Set([
     'COURSE CONTENT AND STRUCTURE',
@@ -186,24 +187,27 @@ router.post('/generate-department-report', async (req, res) => {
                         return null;
                     }
                     console.log(`Getting feedback analysis for staffid: ${staffId} and course: ${code}`);
-                    // Run analysis, batches, cgpa in parallel
-                    const [analysis, batches, cgpa] = await Promise.all([
+                    // Run analysis, batches, degrees, cgpa in parallel
+                    const [analysis, batches, degrees, cgpa] = await Promise.all([
                         getFeedbackAnalysis('', dept || '', '', code, staffId),
                         getBatchesForFacultyCourse(code, staffId),
+                        getDegreesForFacultyCourse(code, staffId),
                         getCgpaBreakdownForFacultyCourse(code, staffId)
                     ]);
 
                     if (analysis && analysis.success) {
-                        console.log(`✓ Analysis found for ${f.faculty_name} (staffid: ${staffId}) with ${batches.length} unique batches`);
+                        console.log(`✓ Analysis found for ${f.faculty_name} (staffid: ${staffId}) with ${batches.length} unique batches and ${degrees.length} unique degrees`);
                         return {
                             faculty_name: f.faculty_name || analysis.faculty_name || '',
                             staffid: staffId,
                             staff_id: f.staff_id || '',
                             batches: batches,
+                            degrees: degrees,
                             analysisData: {
                                 ...analysis,
                                 staff_dept: dept,
                                 unique_batches: batches,
+                                unique_degrees: degrees,
                                 cgpa_breakdown: cgpa
                             }
                         };
@@ -377,8 +381,10 @@ router.post('/generate-department-report-all-batches', async (req, res) => {
                         return;
                     }
                     console.log(`Getting feedback analysis for staffid: ${staffId} and course: ${code} (all batches)`);
-                    const [analysis, cgpa] = await Promise.all([
+                    const [analysis, batches, degrees, cgpa] = await Promise.all([
                         getFeedbackAnalysis('', dept || '', '', code, staffId),
+                        getBatchesForFacultyCourse(code, staffId),
+                        getDegreesForFacultyCourse(code, staffId),
                         getCgpaBreakdownForFacultyCourse(code, staffId)
                     ]);
                     if (analysis && analysis.success) {
@@ -386,10 +392,14 @@ router.post('/generate-department-report-all-batches', async (req, res) => {
                             faculty_name: f.faculty_name || analysis.faculty_name || '',
                             staffid: staffId,
                             staff_id: f.staff_id || '',
+                            batches: batches,
+                            degrees: degrees,
                             analysisData: {
                                 ...analysis,
                                 batch: 'ALL',
                                 staff_dept: dept,
+                                unique_batches: batches,
+                                unique_degrees: degrees,
                                 cgpa_breakdown: cgpa
                             }
                         });
@@ -492,6 +502,316 @@ router.post('/generate-department-report-all-batches', async (req, res) => {
         res.send(buffer);
     } catch (error) {
         console.error('Error generating all-batches department report:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Generate department PDF with negative comments
+router.post('/generate-department-negative-comments-pdf', async (req, res) => {
+    try {
+        const { degree, dept, batch, academicYear, semester, observations, titleSuffix } = req.body || {};
+        
+        if (!degree || !dept) {
+            return res.status(400).json({ error: 'Missing required fields: degree, dept (staff_dept)' });
+        }
+
+        console.log(`\n=== Generating Department Negative Comments PDF ===`);
+        console.log(`Degree: ${degree}`);
+        console.log(`Staff Dept: ${dept}`);
+
+        // Get all courses from course_allocation for the filters (degree + staff_dept)
+        const courses = await getDistinctCourses(degree, dept);
+        if (!courses || courses.length === 0) {
+            return res.status(404).json({ error: 'No courses found for selected filters' });
+        }
+
+        console.log(`Found ${courses.length} courses for degree: ${degree}, staff_dept: ${dept}`);
+
+        // Aggregate negative comments per course per faculty
+        const aggregatedRows = [];
+        
+        for (const course of courses) {
+            const code = course.code ? course.code : course;
+            const name = course.name || '';
+            
+            console.log(`\nProcessing course: ${code}`);
+            
+            // Get faculty from course_feedback table
+            const faculties = await getFacultyByFilters(degree, dept, code);
+            
+            if (faculties.length === 0) {
+                console.log(`No faculty found in course_feedback for course: ${code}`);
+                continue;
+            }
+
+            console.log(`Found ${faculties.length} faculty members in course_feedback for course ${code}`);
+
+            // Check each faculty for negative comments
+            await Promise.all(
+                faculties.map(async (f) => {
+                    const staffId = f.staffid || f.staff_id || '';
+                    if (!staffId) {
+                        console.warn(`Skipping faculty with no staffid: ${f.faculty_name}`);
+                        return;
+                    }
+                    
+                    try {
+                        console.log(`Checking negative comments for staffid: ${staffId} and course: ${code}`);
+                        
+                        // Get comments for this faculty
+                        const commentsResult = await getFacultyComments('', dept || '', '', code, staffId);
+                        
+                        if (!commentsResult.success || !commentsResult.comments || commentsResult.comments.length === 0) {
+                            console.log(`No comments found for ${f.faculty_name} (staffid: ${staffId})`);
+                            return;
+                        }
+
+                        // Analyze comments using FastAPI
+                        const analysisResult = await fastapiService.analyzeComments(
+                            commentsResult.comments,
+                            {
+                                faculty_name: commentsResult.faculty_name,
+                                staff_id: commentsResult.staff_id,
+                                course_code: commentsResult.course_code,
+                                course_name: commentsResult.course_name
+                            }
+                        );
+
+                        if (analysisResult.success && analysisResult.analysis) {
+                            const negativeCommentsList = analysisResult.analysis.negative_comments_list || [];
+                            
+                            if (negativeCommentsList.length > 0) {
+                                aggregatedRows.push({
+                                    course: `${code || ''} - ${name || ''}`.trim(),
+                                    faculty: f.faculty_name || commentsResult.faculty_name || '',
+                                    comments: negativeCommentsList // Array of actual negative comments
+                                });
+                                console.log(`✓ Found ${negativeCommentsList.length} negative comments for ${f.faculty_name}`);
+                            }
+                        }
+                    } catch (error) {
+                        console.error(`Error processing negative comments for ${f.faculty_name}:`, error);
+                    }
+                })
+            );
+        }
+
+        if (aggregatedRows.length === 0) {
+            return res.status(404).json({ error: 'No faculty with negative comments found for selected filters' });
+        }
+
+        console.log(`\n=== Negative Comments PDF Summary ===`);
+        console.log(`Total faculty with negative comments: ${aggregatedRows.length}`);
+
+        // Generate PDF
+        const pdfBuffer = await generateDepartmentNegativeCommentsPdf({
+            department: dept,
+            academicYear: academicYear || '2025-26',
+            semester: semester || 'Odd',
+            observations: Array.isArray(observations) ? observations : [],
+            rows: aggregatedRows,
+            titleSuffix: titleSuffix || `${degree}${batch && batch !== 'ALL' ? ` - Batch ${batch}` : ''}`
+        });
+
+        if (!pdfBuffer || pdfBuffer.length === 0) {
+            throw new Error('Generated PDF buffer is empty');
+        }
+
+        const safeDeptName = (dept || 'department').toString().replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        res.status(200);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${safeDeptName}_negative_comments_report.pdf"`);
+        res.setHeader('Content-Length', pdfBuffer.length);
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Accept-Ranges', 'none');
+        res.end(pdfBuffer);
+        
+    } catch (error) {
+        console.error('Error generating negative comments PDF:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Generate department Excel with negative comments
+router.post('/generate-department-negative-comments-excel', async (req, res) => {
+    try {
+        const { degree, dept, batch, academicYear, semester } = req.body || {};
+        
+        if (!degree || !dept) {
+            return res.status(400).json({ error: 'Missing required fields: degree, dept (staff_dept)' });
+        }
+
+        console.log(`\n=== Generating Department Negative Comments Excel ===`);
+        console.log(`Degree: ${degree}`);
+        console.log(`Staff Dept: ${dept}`);
+
+        // Get all courses from course_allocation for the filters
+        const courses = await getDistinctCourses(degree, dept);
+        if (!courses || courses.length === 0) {
+            return res.status(404).json({ error: 'No courses found for selected filters' });
+        }
+
+        console.log(`Found ${courses.length} courses for degree: ${degree}, staff_dept: ${dept}`);
+
+        // Build grouped data structure similar to regular Excel report
+        const groupedData = [];
+        
+        for (const course of courses) {
+            const code = course.code ? course.code : course;
+            const name = course.name || '';
+            
+            console.log(`\nProcessing course: ${code}`);
+            
+            // Get faculty from course_feedback table
+            const faculties = await getFacultyByFilters(degree, dept, code);
+            
+            if (faculties.length === 0) {
+                console.log(`No faculty found in course_feedback for course: ${code}`);
+                continue;
+            }
+
+            console.log(`Found ${faculties.length} faculty members in course_feedback for course ${code}`);
+
+            const courseFaculties = [];
+            
+            // Process each faculty
+            await Promise.all(
+                faculties.map(async (f) => {
+                    const staffId = f.staffid || f.staff_id || '';
+                    if (!staffId) {
+                        console.warn(`Skipping faculty with no staffid: ${f.faculty_name}`);
+                        return;
+                    }
+                    
+                    try {
+                        // Get comments for this faculty first (we need this for negative comments)
+                        // getFacultyComments signature: (degree, department, batch, courseCode, staffId, cgpa)
+                        const commentsResult = await getFacultyComments('', dept || '', '', code, staffId);
+                        
+                        if (!commentsResult.success) {
+                            console.log(`Failed to get comments for ${f.faculty_name} (staffid: ${staffId}): ${commentsResult.message || 'Unknown error'}`);
+                            return;
+                        }
+                        
+                        let negativeComments = [];
+                        if (commentsResult.comments && commentsResult.comments.length > 0) {
+                            console.log(`Found ${commentsResult.comments.length} comments for ${f.faculty_name}, analyzing...`);
+                            
+                            // Analyze comments using FastAPI
+                            const sentimentResult = await fastapiService.analyzeComments(
+                                commentsResult.comments,
+                                {
+                                    faculty_name: commentsResult.faculty_name || f.faculty_name,
+                                    staff_id: commentsResult.staff_id || staffId,
+                                    course_code: commentsResult.course_code || code,
+                                    course_name: commentsResult.course_name || name
+                                }
+                            );
+
+                            if (sentimentResult.success && sentimentResult.analysis) {
+                                negativeComments = sentimentResult.analysis.negative_comments_list || [];
+                                console.log(`FastAPI analysis result: ${negativeComments.length} negative comments found`);
+                            } else {
+                                console.log(`FastAPI analysis failed for ${f.faculty_name}: ${sentimentResult.message || 'Unknown error'}`);
+                            }
+                        } else {
+                            console.log(`No comments found for ${f.faculty_name} (staffid: ${staffId})`);
+                        }
+
+                        // Only include faculty with negative comments
+                        if (negativeComments.length === 0) {
+                            console.log(`Skipping ${f.faculty_name} - no negative comments`);
+                            return;
+                        }
+
+                        // Get analysis data, batches, and degrees for this faculty (for scores, CGPA, etc.)
+                        // Note: getFeedbackAnalysis signature is (degree, department, batch, courseCode, staffId)
+                        const [analysisResult, batches, degrees] = await Promise.all([
+                            getFeedbackAnalysis(degree || '', dept || '', '', code, staffId),
+                            getBatchesForFacultyCourse(code, staffId),
+                            getDegreesForFacultyCourse(code, staffId)
+                        ]);
+                        
+                        // Add faculty data with analysis and negative comments
+                        // Include even if analysis fails, as long as we have negative comments
+                        courseFaculties.push({
+                            faculty_name: f.faculty_name || commentsResult?.faculty_name || '',
+                            staffid: staffId,
+                            staff_id: staffId,
+                            batches: batches,
+                            degrees: degrees,
+                            analysisData: analysisResult.success ? {
+                                ...analysisResult,
+                                unique_batches: batches,
+                                unique_degrees: degrees
+                            } : null, // Can be null if no analysis
+                            negativeComments: negativeComments
+                        });
+                        
+                        console.log(`✓ Processed ${f.faculty_name} - ${negativeComments.length} negative comments${analysisResult.success ? ' (with analysis data)' : ' (no analysis data)'}`);
+                    } catch (error) {
+                        console.error(`Error processing ${f.faculty_name}:`, error);
+                    }
+                })
+            );
+
+            if (courseFaculties.length > 0) {
+                groupedData.push({
+                    course_code: code,
+                    course_name: name,
+                    faculties: courseFaculties
+                });
+            }
+        }
+
+        if (groupedData.length === 0) {
+            console.log('\n=== No Data Found - Debug Info ===');
+            console.log(`Courses found: ${courses.length}`);
+            console.log(`Total faculty checked: ${courses.reduce((sum, c) => {
+                // This is approximate since we process in parallel
+                return sum;
+            }, 0)}`);
+            return res.status(404).json({ 
+                error: 'No faculty with negative comments found for selected filters',
+                debug: {
+                    courses_found: courses.length,
+                    courses_checked: courses.map(c => c.code || c).join(', ')
+                }
+            });
+        }
+
+        console.log(`\n=== Negative Comments Excel Summary ===`);
+        console.log(`Total courses: ${groupedData.length}`);
+        const totalFaculty = groupedData.reduce((sum, c) => sum + c.faculties.length, 0);
+        console.log(`Total faculty: ${totalFaculty}`);
+
+        // Generate Excel
+        const workbook = await generateDepartmentNegativeCommentsExcel(
+            {
+                degree: degree || '',
+                dept: dept || '',
+                batch: batch || 'ALL'
+            },
+            groupedData
+        );
+
+        // Convert workbook to buffer
+        const buffer = await workbook.xlsx.writeBuffer();
+
+        if (!buffer || buffer.length === 0) {
+            throw new Error('Generated Excel buffer is empty');
+        }
+
+        const safeDeptName = (dept || 'department').toString().replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        res.status(200);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${safeDeptName}_negative_comments_report.xlsx"`);
+        res.setHeader('Content-Length', buffer.length);
+        res.setHeader('Cache-Control', 'no-cache');
+        res.end(buffer);
+        
+    } catch (error) {
+        console.error('Error generating negative comments Excel:', error);
         res.status(500).json({ error: error.message });
     }
 });

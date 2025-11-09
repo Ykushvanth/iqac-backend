@@ -943,7 +943,10 @@ async function generateDepartmentReport(filters, groupedData) {
         Object.entries(first.analysis).forEach(([key, section]) => {
             const questions = Object.values(section.questions || {});
             const count = questions.length;
-            sectionGroups.push({ title: section.section_name || key, count });
+            // Keep original section names, but mark excluded sections
+            const isExcluded = isExcludedSection(key, section);
+            const sectionTitle = section.section_name || key;
+            sectionGroups.push({ title: sectionTitle, count, isExcluded, originalKey: key, originalSection: section });
             questions.forEach(q => questionHeaders.push(q.question));
         });
 
@@ -954,41 +957,166 @@ async function generateDepartmentReport(filters, groupedData) {
         });
     }
 
-    const scoreHeaders = ['Average'];
+    const scoreHeaders = ['Final Score'];
     const cgpaHeaders = ['CGPA <6 (%)', 'CGPA 6-7.99 (%)', 'CGPA ≥8 (%)'];
 
-    // Add a merged section heading row above the question headers
+    // Add two-level heading rows: parent "Non-scoring sections" and child individual section names
     if (sectionGroups.length > 0) {
         const totalCols = courseDetailHeaders.length + questionHeaders.length + sectionHeaders.length + scoreHeaders.length + cgpaHeaders.length;
-        const headingRowValues = new Array(totalCols).fill('');
+        
+        // First row: Parent heading with "Non-scoring sections" ONLY over excluded sections
+        const parentHeadingRowValues = new Array(totalCols).fill('');
+        // Second row: Child headings with individual section names ONLY for excluded sections
+        const childHeadingRowValues = new Array(totalCols).fill('');
 
-        // Place each section title at the start of its question block
         let questionStartCol = courseDetailHeaders.length + 1; // 1-based for Excel
         let colPointer = questionStartCol;
-        sectionGroups.forEach(g => {
+        let nonScoringStartCol = null;
+        let nonScoringEndCol = null;
+        
+        sectionGroups.forEach((g, index) => {
             const startCol = colPointer;
             const endCol = startCol + Math.max(g.count - 1, 0);
-            // Set the title value at start column (convert to 0-based index for array)
-            headingRowValues[startCol - 1] = g.title;
+            
+            if (g.isExcluded) {
+                // Track the range for non-scoring sections to merge them in parent row
+                if (nonScoringStartCol === null) {
+                    nonScoringStartCol = startCol;
+                }
+                nonScoringEndCol = endCol;
+                // Set individual section name ONLY in child row (not in parent row)
+                childHeadingRowValues[startCol - 1] = g.title;
+            } else {
+                // For non-excluded sections, set the title ONLY in parent row (no child row needed)
+                if (nonScoringStartCol !== null && nonScoringEndCol !== null) {
+                    // Set "Non-scoring sections" in parent row for excluded sections
+                    parentHeadingRowValues[nonScoringStartCol - 1] = 'Non-scoring sections';
+                    nonScoringStartCol = null;
+                    nonScoringEndCol = null;
+                }
+                parentHeadingRowValues[startCol - 1] = g.title;
+                // Leave child row empty for non-excluded sections
+            }
             colPointer = endCol + 1;
         });
+        
+        // If we have excluded sections at the end, set the parent title
+        if (nonScoringStartCol !== null && nonScoringEndCol !== null) {
+            parentHeadingRowValues[nonScoringStartCol - 1] = 'Non-scoring sections';
+        }
 
-        const sectionHeadingRow = sheet.addRow(headingRowValues);
+        // Add parent heading row
+        const parentHeadingRow = sheet.addRow(parentHeadingRowValues);
+        
+        // Add child heading row
+        const childHeadingRow = sheet.addRow(childHeadingRowValues);
 
-        // Merge and style each section title across its question span
+        // Merge and style parent row
         colPointer = questionStartCol;
-        sectionGroups.forEach(g => {
+        nonScoringStartCol = null;
+        nonScoringEndCol = null;
+        
+        sectionGroups.forEach((g, index) => {
             const startCol = colPointer;
             const endCol = startCol + Math.max(g.count - 1, 0);
-            sheet.mergeCells(sectionHeadingRow.number, startCol, sectionHeadingRow.number, endCol);
-            const cell = sectionHeadingRow.getCell(startCol);
-            cell.font = { bold: true };
-            cell.alignment = { horizontal: 'center' };
-            cell.fill = {
+            
+            if (g.isExcluded) {
+                if (nonScoringStartCol === null) {
+                    nonScoringStartCol = startCol;
+                }
+                nonScoringEndCol = endCol;
+            } else {
+                // If we were tracking excluded sections, merge them in parent row
+                if (nonScoringStartCol !== null && nonScoringEndCol !== null) {
+                    sheet.mergeCells(parentHeadingRow.number, nonScoringStartCol, parentHeadingRow.number, nonScoringEndCol);
+                    const parentCell = parentHeadingRow.getCell(nonScoringStartCol);
+                    parentCell.value = 'Non-scoring sections';
+                    parentCell.font = { bold: true };
+                    parentCell.alignment = { horizontal: 'center' };
+                    parentCell.fill = {
+                        type: 'pattern',
+                        pattern: 'solid',
+                        fgColor: { argb: 'FFE6E6FA' }
+                    };
+                    nonScoringStartCol = null;
+                    nonScoringEndCol = null;
+                }
+                
+                // Merge non-excluded sections in parent row
+                sheet.mergeCells(parentHeadingRow.number, startCol, parentHeadingRow.number, endCol);
+                const parentCell = parentHeadingRow.getCell(startCol);
+                parentCell.font = { bold: true };
+                parentCell.alignment = { horizontal: 'center' };
+                parentCell.fill = {
+                    type: 'pattern',
+                    pattern: 'solid',
+                    fgColor: { argb: 'FFE6E6FA' }
+                };
+            }
+            
+            colPointer = endCol + 1;
+        });
+        
+        // If excluded sections are at the end, merge them in parent row
+        if (nonScoringStartCol !== null && nonScoringEndCol !== null) {
+            sheet.mergeCells(parentHeadingRow.number, nonScoringStartCol, parentHeadingRow.number, nonScoringEndCol);
+            const parentCell = parentHeadingRow.getCell(nonScoringStartCol);
+            parentCell.value = 'Non-scoring sections';
+            parentCell.font = { bold: true };
+            parentCell.alignment = { horizontal: 'center' };
+            parentCell.fill = {
                 type: 'pattern',
                 pattern: 'solid',
                 fgColor: { argb: 'FFE6E6FA' }
             };
+        }
+
+        // Merge and style child row (individual section names ONLY for excluded sections)
+        colPointer = questionStartCol;
+        sectionGroups.forEach((g, index) => {
+            const startCol = colPointer;
+            const endCol = startCol + Math.max(g.count - 1, 0);
+            
+            // Merge ONLY excluded sections in child row (non-excluded sections have empty child row)
+            if (g.isExcluded) {
+                const childCell = childHeadingRow.getCell(startCol);
+                // Get the value that should be in this cell
+                const expectedValue = childHeadingRowValues[startCol - 1];
+                
+                // Ensure the cell has the value set
+                if (expectedValue && expectedValue.toString().trim() !== '') {
+                    childCell.value = expectedValue;
+                    
+                    // Clear values from other cells in the merge range (keep only first cell)
+                    if (endCol > startCol) {
+                        for (let col = startCol + 1; col <= endCol; col++) {
+                            const clearCell = childHeadingRow.getCell(col);
+                            if (clearCell.value === expectedValue) {
+                                clearCell.value = '';
+                            }
+                        }
+                    }
+                    
+                    // Only merge if there's more than one column (can't merge a single cell)
+                    if (endCol > startCol) {
+                        try {
+                            sheet.mergeCells(childHeadingRow.number, startCol, childHeadingRow.number, endCol);
+                        } catch (e) {
+                            // If merge fails (e.g., cells already merged or overlapping), just style the first cell
+                            console.warn(`Could not merge cells for child section ${g.title} (${startCol}-${endCol}):`, e.message);
+                        }
+                    }
+                    // Style the cell regardless of merge success
+                    childCell.font = { bold: true };
+                    childCell.alignment = { horizontal: 'center' };
+                    childCell.fill = {
+                        type: 'pattern',
+                        pattern: 'solid',
+                        fgColor: { argb: 'FFF0F0F0' } // Slightly lighter gray for child row
+                    };
+                }
+            }
+            
             colPointer = endCol + 1;
         });
     }
@@ -1057,15 +1185,36 @@ async function generateDepartmentReport(filters, groupedData) {
     
     groupedData.forEach(course => {
         course.faculties.forEach(f => {
+            // Format batches: if multiple, join with comma; if one, show that one; if none, show empty
+            let batchDisplay = '';
+            if (f.batches && Array.isArray(f.batches) && f.batches.length > 0) {
+                batchDisplay = f.batches.length > 1 ? f.batches.join(', ') : f.batches[0];
+            } else if (f.analysisData?.unique_batches && Array.isArray(f.analysisData.unique_batches) && f.analysisData.unique_batches.length > 0) {
+                batchDisplay = f.analysisData.unique_batches.length > 1 ? f.analysisData.unique_batches.join(', ') : f.analysisData.unique_batches[0];
+            } else if (f.analysisData?.batch) {
+                batchDisplay = f.analysisData.batch;
+            }
+            
+            // Format degrees: if multiple, join with comma; if one, show that one; if none, show filter degree
+            let degreeDisplay = '';
+            if (f.degrees && Array.isArray(f.degrees) && f.degrees.length > 0) {
+                degreeDisplay = f.degrees.length > 1 ? f.degrees.join(', ') : f.degrees[0];
+            } else if (f.analysisData?.unique_degrees && Array.isArray(f.analysisData.unique_degrees) && f.analysisData.unique_degrees.length > 0) {
+                degreeDisplay = f.analysisData.unique_degrees.length > 1 ? f.analysisData.unique_degrees.join(', ') : f.analysisData.unique_degrees[0];
+            } else {
+                // Fallback to filter degree if no degrees found for faculty
+                degreeDisplay = filters.degree || '';
+            }
+            
             const meta = [
                 filters.dept || '',
-                filters.degree || '',
+                degreeDisplay,
                 f.analysisData?.ug_or_pg || '',
                 f.analysisData?.arts_or_engg || '',
                 f.analysisData?.short_form || '',
                 (f.analysisData?.course_code || course.course_code || ''),
                 course.course_name || '',
-                f.analysisData?.batch || '',
+                batchDisplay,
                 (f.staffid || f.staff_id || ''),
                 f.faculty_name || '',
                 
@@ -1374,18 +1523,25 @@ async function generateSchoolReport(school, filters, groupedDataByDept) {
                 Object.entries(first.analysis).forEach(([key, section]) => {
                     const questions = Object.values(section.questions || {});
                     const count = questions.length;
-                    sectionGroups.push({ title: section.section_name || key, count });
+                    // Keep original section names, but mark excluded sections - same logic as generateDepartmentReport
+                    const isExcluded = isExcludedSection(key, section);
+                    const sectionTitle = section.section_name || key;
+                    sectionGroups.push({ title: sectionTitle, count, isExcluded });
                 });
             }
             
             // Rename and add to main workbook
             const newSheet = workbook.addWorksheet(dept.substring(0, 31)); // Excel sheet name limit
-            let sectionHeadingRowNumber = null;
+            let parentHeadingRowNumber = null;
+            let childHeadingRowNumber = null;
+            let rowCount = 0;
             
             // Copy all rows from deptSheet to newSheet
             deptSheet.eachRow((row, rowNumber) => {
                 const newRow = newSheet.addRow([]);
-                let isSectionHeadingRow = false;
+                rowCount++;
+                let isParentHeadingRow = false;
+                let isChildHeadingRow = false;
                 
                 row.eachCell((cell, colNumber) => {
                     const newCell = newRow.getCell(colNumber);
@@ -1398,38 +1554,214 @@ async function generateSchoolReport(school, filters, groupedDataByDept) {
                     // Check if this row contains section headings (has section names in question columns)
                     if (colNumber > courseDetailHeaders.length && cell.value && typeof cell.value === 'string') {
                         const sectionTitles = sectionGroups.map(g => g.title);
-                        if (sectionTitles.includes(cell.value)) {
-                            isSectionHeadingRow = true;
+                        // Check for "Non-scoring sections" (parent heading) or individual section names (child heading)
+                        if (cell.value === 'Non-scoring sections') {
+                            isParentHeadingRow = true;
+                        } else if (sectionTitles.includes(cell.value)) {
+                            isChildHeadingRow = true;
                         }
                     }
                 });
                 
-                if (isSectionHeadingRow && !sectionHeadingRowNumber) {
-                    sectionHeadingRowNumber = newRow.number;
+                if (isParentHeadingRow && !parentHeadingRowNumber) {
+                    parentHeadingRowNumber = newRow.number;
+                }
+                if (isChildHeadingRow && !childHeadingRowNumber && parentHeadingRowNumber) {
+                    childHeadingRowNumber = newRow.number;
                 }
             });
             
-            // Recreate merged cells for section headings
-            if (sectionHeadingRowNumber && sectionGroups.length > 0) {
+            // Clear duplicate section names from merged cells (keep only first cell of each section)
+            if (parentHeadingRowNumber && sectionGroups.length > 0) {
+                const questionStartCol = courseDetailHeaders.length + 1;
+                let colPointer = questionStartCol;
+                let nonScoringStartCol = null;
+                let nonScoringEndCol = null;
+                
+                sectionGroups.forEach(g => {
+                    const startCol = colPointer;
+                    const endCol = startCol + Math.max(g.count - 1, 0);
+                    
+                    if (g.isExcluded) {
+                        if (nonScoringStartCol === null) {
+                            nonScoringStartCol = startCol;
+                        }
+                        nonScoringEndCol = endCol;
+                    } else {
+                        // Clear section names from columns 2 to endCol (keep only first column)
+                        if (nonScoringStartCol !== null && nonScoringEndCol !== null) {
+                            for (let col = nonScoringStartCol + 1; col <= nonScoringEndCol; col++) {
+                                const cell = newSheet.getRow(parentHeadingRowNumber).getCell(col);
+                                if (cell.value === 'Non-scoring sections') {
+                                    cell.value = '';
+                                }
+                            }
+                            nonScoringStartCol = null;
+                            nonScoringEndCol = null;
+                        }
+                        // Clear section names from columns 2 to endCol for non-excluded sections
+                        for (let col = startCol + 1; col <= endCol; col++) {
+                            const cell = newSheet.getRow(parentHeadingRowNumber).getCell(col);
+                            if (cell.value === g.title) {
+                                cell.value = '';
+                            }
+                        }
+                    }
+                    colPointer = endCol + 1;
+                });
+                
+                // Clear excluded sections at the end
+                if (nonScoringStartCol !== null && nonScoringEndCol !== null) {
+                    for (let col = nonScoringStartCol + 1; col <= nonScoringEndCol; col++) {
+                        const cell = newSheet.getRow(parentHeadingRowNumber).getCell(col);
+                        if (cell.value === 'Non-scoring sections') {
+                            cell.value = '';
+                        }
+                    }
+                }
+            }
+            
+            // Clear duplicate section names from child row (keep only first cell of each excluded section)
+            if (childHeadingRowNumber && sectionGroups.length > 0) {
                 const questionStartCol = courseDetailHeaders.length + 1;
                 let colPointer = questionStartCol;
                 
                 sectionGroups.forEach(g => {
                     const startCol = colPointer;
                     const endCol = startCol + Math.max(g.count - 1, 0);
+                    
+                    // Only clear for excluded sections (they have child row entries)
+                    if (g.isExcluded) {
+                        // Clear section names from columns 2 to endCol (keep only first column)
+                        for (let col = startCol + 1; col <= endCol; col++) {
+                            const cell = newSheet.getRow(childHeadingRowNumber).getCell(col);
+                            if (cell.value === g.title) {
+                                cell.value = '';
+                            }
+                        }
+                    }
+                    colPointer = endCol + 1;
+                });
+            }
+            
+            // Recreate merged cells for two-level section headings (parent and child rows)
+            if (parentHeadingRowNumber && childHeadingRowNumber && sectionGroups.length > 0) {
+                const questionStartCol = courseDetailHeaders.length + 1;
+                let colPointer = questionStartCol;
+                let nonScoringStartCol = null;
+                let nonScoringEndCol = null;
+                
+                // Process parent row (Non-scoring sections heading)
+                sectionGroups.forEach(g => {
+                    const startCol = colPointer;
+                    const endCol = startCol + Math.max(g.count - 1, 0);
+                    
+                    if (g.isExcluded) {
+                        if (nonScoringStartCol === null) {
+                            nonScoringStartCol = startCol;
+                        }
+                        nonScoringEndCol = endCol;
+                    } else {
+                        // If we were tracking excluded sections, merge them in parent row
+                        if (nonScoringStartCol !== null && nonScoringEndCol !== null) {
+                            try {
+                                newSheet.mergeCells(parentHeadingRowNumber, nonScoringStartCol, parentHeadingRowNumber, nonScoringEndCol);
+                                const parentCell = newSheet.getRow(parentHeadingRowNumber).getCell(nonScoringStartCol);
+                                parentCell.value = 'Non-scoring sections';
+                                parentCell.font = { bold: true };
+                                parentCell.alignment = { horizontal: 'center' };
+                                parentCell.fill = {
+                                    type: 'pattern',
+                                    pattern: 'solid',
+                                    fgColor: { argb: 'FFE6E6FA' }
+                                };
+                            } catch (e) {
+                                console.warn(`Could not merge cells for non-scoring sections in department ${dept}:`, e.message);
+                            }
+                            nonScoringStartCol = null;
+                            nonScoringEndCol = null;
+                        }
+                        
+                        // Merge non-excluded sections in parent row
+                        try {
+                            newSheet.mergeCells(parentHeadingRowNumber, startCol, parentHeadingRowNumber, endCol);
+                            const parentCell = newSheet.getRow(parentHeadingRowNumber).getCell(startCol);
+                            parentCell.font = { bold: true };
+                            parentCell.alignment = { horizontal: 'center' };
+                            parentCell.fill = {
+                                type: 'pattern',
+                                pattern: 'solid',
+                                fgColor: { argb: 'FFE6E6FA' }
+                            };
+                        } catch (e) {
+                            console.warn(`Could not merge cells for section ${g.title} in department ${dept}:`, e.message);
+                        }
+                    }
+                    colPointer = endCol + 1;
+                });
+                
+                // If excluded sections are at the end, merge them in parent row
+                if (nonScoringStartCol !== null && nonScoringEndCol !== null) {
                     try {
-                        newSheet.mergeCells(sectionHeadingRowNumber, startCol, sectionHeadingRowNumber, endCol);
-                        const cell = newSheet.getRow(sectionHeadingRowNumber).getCell(startCol);
-                        cell.font = { bold: true };
-                        cell.alignment = { horizontal: 'center' };
-                        cell.fill = {
+                        newSheet.mergeCells(parentHeadingRowNumber, nonScoringStartCol, parentHeadingRowNumber, nonScoringEndCol);
+                        const parentCell = newSheet.getRow(parentHeadingRowNumber).getCell(nonScoringStartCol);
+                        parentCell.value = 'Non-scoring sections';
+                        parentCell.font = { bold: true };
+                        parentCell.alignment = { horizontal: 'center' };
+                        parentCell.fill = {
                             type: 'pattern',
                             pattern: 'solid',
                             fgColor: { argb: 'FFE6E6FA' }
                         };
                     } catch (e) {
-                        console.warn(`Could not merge cells for section ${g.title} in department ${dept}:`, e.message);
+                        console.warn(`Could not merge cells for non-scoring sections at end in department ${dept}:`, e.message);
                     }
+                }
+                
+                // Process child row (individual section names ONLY for excluded sections)
+                colPointer = questionStartCol;
+                sectionGroups.forEach(g => {
+                    const startCol = colPointer;
+                    const endCol = startCol + Math.max(g.count - 1, 0);
+                    
+                    // Only merge child row cells for excluded sections (they have values in child row)
+                    if (g.isExcluded) {
+                        const childCell = newSheet.getRow(childHeadingRowNumber).getCell(startCol);
+                        // Only merge if there's a value and more than one column
+                        if (childCell.value && endCol > startCol) {
+                            try {
+                                newSheet.mergeCells(childHeadingRowNumber, startCol, childHeadingRowNumber, endCol);
+                                childCell.font = { bold: true };
+                                childCell.alignment = { horizontal: 'center' };
+                                childCell.fill = {
+                                    type: 'pattern',
+                                    pattern: 'solid',
+                                    fgColor: { argb: 'FFF0F0F0' } // Slightly lighter gray for child row
+                                };
+                            } catch (e) {
+                                console.warn(`Could not merge cells for child section ${g.title} in department ${dept}:`, e.message);
+                                // If merge fails, at least style the first cell
+                                childCell.font = { bold: true };
+                                childCell.alignment = { horizontal: 'center' };
+                                childCell.fill = {
+                                    type: 'pattern',
+                                    pattern: 'solid',
+                                    fgColor: { argb: 'FFF0F0F0' }
+                                };
+                            }
+                        } else if (childCell.value) {
+                            // Single column, just style it
+                            childCell.font = { bold: true };
+                            childCell.alignment = { horizontal: 'center' };
+                            childCell.fill = {
+                                type: 'pattern',
+                                pattern: 'solid',
+                                fgColor: { argb: 'FFF0F0F0' }
+                            };
+                        }
+                    }
+                    // For non-excluded sections, child row is empty, so skip merging
+                    
                     colPointer = endCol + 1;
                 });
             }
@@ -1446,4 +1778,219 @@ async function generateSchoolReport(school, filters, groupedDataByDept) {
     return workbook;
 }
 
-module.exports = { generateReport, generateDepartmentReport, generateSchoolReport };
+// Generate department Excel report with negative comments (replaces question columns with Open Comments)
+async function generateDepartmentNegativeCommentsExcel(filters, groupedData) {
+    const ExcelJS = require('exceljs');
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'IQAC Feedback System';
+    workbook.lastModifiedBy = 'IQAC Feedback System';
+    workbook.created = new Date();
+    workbook.modified = new Date();
+
+    const sheet = workbook.addWorksheet('Negative Comments Report');
+
+    sheet.addRow(['Department-wise Negative Comments Report']);
+    sheet.addRow(['']);
+    sheet.addRow(['Degree', filters.degree || '']);
+    sheet.addRow(['Department', filters.dept || '']);
+    sheet.addRow(['Batch', filters.batch || '']);
+    sheet.addRow(['Generated On', new Date().toLocaleString()]);
+    sheet.addRow(['']);
+    sheet.getCell('A1').font = { size: 16, bold: true };
+
+    const courseDetailHeaders = [
+        'Dept', 'Degree', 'UG_or_PG', 'Arts_or_Engg', 'Short_Form',
+        'Course_Code', 'Course_Name', 'Batch', 'Staff_id', 'Faculty_Name'
+    ];
+
+    // Instead of question headers, we have Open Comments
+    const openCommentsHeader = 'Open Comments';
+
+    // Build header row: course details + Open Comments only
+    const headers = [...courseDetailHeaders, openCommentsHeader];
+    
+    // Add header row
+    sheet.addRow(headers);
+    const headerRow = sheet.getRow(sheet.rowCount);
+    headerRow.font = { bold: true };
+    headerRow.alignment = { horizontal: 'center' };
+    headerRow.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFE6E6FA' }
+    };
+    // Header font color is black (default)
+
+    // Set column widths
+    const widths = [10, 12, 10, 12, 12, 14, 30, 10, 14, 22, 60]; // Last one for Open Comments
+    for (let i = 0; i < widths.length; i++) {
+        sheet.getColumn(i + 1).width = widths[i];
+    }
+    
+    // Set width for Open Comments column (after course detail headers)
+    const openCommentsColIndex = courseDetailHeaders.length + 1;
+    sheet.getColumn(openCommentsColIndex).width = 80; // Wider since it's the only data column
+
+    // No need to compute scores - we only need Open Comments
+
+    // Add data rows
+    groupedData.forEach(course => {
+        course.faculties.forEach(f => {
+            // Format batches: if multiple, join with comma; if one, show that one; if none, show empty
+            let batchDisplay = '';
+            if (f.batches && Array.isArray(f.batches) && f.batches.length > 0) {
+                batchDisplay = f.batches.length > 1 ? f.batches.join(', ') : f.batches[0];
+            } else if (f.analysisData?.unique_batches && Array.isArray(f.analysisData.unique_batches) && f.analysisData.unique_batches.length > 0) {
+                batchDisplay = f.analysisData.unique_batches.length > 1 ? f.analysisData.unique_batches.join(', ') : f.analysisData.unique_batches[0];
+            } else if (f.analysisData?.batch) {
+                batchDisplay = f.analysisData.batch;
+            }
+            
+            // Format degrees: if multiple, join with comma; if one, show that one; if none, show filter degree
+            let degreeDisplay = '';
+            if (f.degrees && Array.isArray(f.degrees) && f.degrees.length > 0) {
+                degreeDisplay = f.degrees.length > 1 ? f.degrees.join(', ') : f.degrees[0];
+            } else if (f.analysisData?.unique_degrees && Array.isArray(f.analysisData.unique_degrees) && f.analysisData.unique_degrees.length > 0) {
+                degreeDisplay = f.analysisData.unique_degrees.length > 1 ? f.analysisData.unique_degrees.join(', ') : f.analysisData.unique_degrees[0];
+            } else {
+                // Fallback to filter degree if no degrees found for faculty
+                degreeDisplay = filters.degree || '';
+            }
+            
+            const meta = [
+                filters.dept || '',
+                degreeDisplay,
+                f.analysisData?.ug_or_pg || '',
+                f.analysisData?.arts_or_engg || '',
+                f.analysisData?.short_form || '',
+                (f.analysisData?.course_code || course.course_code || ''),
+                course.course_name || '',
+                batchDisplay,
+                (f.staffid || f.staff_id || ''),
+                f.faculty_name || '',
+            ];
+            
+            // Get negative comments for this faculty
+            let openComments = '';
+            if (f.negativeComments && Array.isArray(f.negativeComments) && f.negativeComments.length > 0) {
+                openComments = f.negativeComments.filter(c => c && c.trim()).join('\n\n');
+            }
+            
+            // Build row: meta + Open Comments only
+            const row = [...meta, openComments];
+            
+            const addedRow = sheet.addRow(row);
+            
+            // Format Open Comments column (wrap text)
+            const openCommentsCell = addedRow.getCell(openCommentsColIndex);
+            openCommentsCell.alignment = { 
+                vertical: 'top', 
+                horizontal: 'left',
+                wrapText: true 
+            };
+            
+            // Apply borders to metadata columns
+            for (let i = 1; i <= meta.length; i++) {
+                const cell = addedRow.getCell(i);
+                cell.border = {
+                    top: { style: 'thin' },
+                    left: { style: 'thin' },
+                    bottom: { style: 'thin' },
+                    right: { style: 'thin' }
+                };
+                cell.alignment = { vertical: 'middle', horizontal: 'center' };
+            }
+            
+            // Border for Open Comments cell
+            openCommentsCell.border = {
+                top: { style: 'thin' },
+                left: { style: 'thin' },
+                bottom: { style: 'thin' },
+                right: { style: 'thin' }
+            };
+        });
+    });
+
+    return workbook;
+}
+
+// Generate school-wise negative comments Excel report (multiple departments in one file)
+// groupedDataByDept: Map of department -> groupedData (same structure as generateDepartmentNegativeCommentsExcel)
+async function generateSchoolNegativeCommentsExcel(school, filters, groupedDataByDept) {
+    const ExcelJS = require('exceljs');
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'IQAC Feedback System';
+    workbook.lastModifiedBy = 'IQAC Feedback System';
+    workbook.created = new Date();
+    workbook.modified = new Date();
+
+    // Add School Info Sheet
+    const infoSheet = workbook.addWorksheet('School Information');
+    infoSheet.addRow(['School-wise Negative Comments Report']);
+    infoSheet.addRow(['']);
+    infoSheet.addRow(['School', school]);
+    infoSheet.addRow(['Total Departments', Object.keys(groupedDataByDept).length]);
+    infoSheet.addRow(['Generated Date', new Date().toLocaleString()]);
+    infoSheet.addRow(['']);
+    
+    // Format Info Sheet
+    infoSheet.getCell('A1').font = { size: 16, bold: true };
+    infoSheet.getColumn('A').width = 20;
+    infoSheet.getColumn('B').width = 40;
+
+    // Add department list
+    infoSheet.addRow(['Departments Included:']);
+    infoSheet.getRow(infoSheet.rowCount).font = { bold: true };
+    Object.keys(groupedDataByDept).sort().forEach((dept, idx) => {
+        infoSheet.addRow([`${idx + 1}.`, dept]);
+    });
+
+    // Generate a sheet for each department using the existing generateDepartmentNegativeCommentsExcel logic
+    const departmentNames = Object.keys(groupedDataByDept).sort();
+    
+    for (const dept of departmentNames) {
+        const groupedData = groupedDataByDept[dept];
+        if (!groupedData || groupedData.length === 0) {
+            console.log(`Skipping empty department: ${dept}`);
+            continue;
+        }
+
+        // Create a temporary workbook to get the department sheet structure
+        const tempWorkbook = await generateDepartmentNegativeCommentsExcel(
+            { degree: filters.degree || '', dept: dept, batch: filters.batch || 'ALL' },
+            groupedData
+        );
+        
+        // Get the department sheet from temp workbook
+        const deptSheet = tempWorkbook.getWorksheet('Negative Comments Report');
+        if (deptSheet) {
+            // Rename and add to main workbook
+            const newSheet = workbook.addWorksheet(dept.substring(0, 31)); // Excel sheet name limit
+            
+            // Copy all rows from deptSheet to newSheet
+            deptSheet.eachRow((row, rowNumber) => {
+                const newRow = newSheet.addRow([]);
+                
+                row.eachCell((cell, colNumber) => {
+                    const newCell = newRow.getCell(colNumber);
+                    newCell.value = cell.value;
+                    newCell.style = cell.style;
+                    if (cell.formula) {
+                        newCell.formula = cell.formula;
+                    }
+                });
+            });
+            
+            // Copy column widths
+            deptSheet.columns.forEach((col, idx) => {
+                if (col.width) {
+                    newSheet.getColumn(idx + 1).width = col.width;
+                }
+            });
+        }
+    }
+
+    return workbook;
+}
+
+module.exports = { generateReport, generateDepartmentReport, generateSchoolReport, generateDepartmentNegativeCommentsExcel, generateSchoolNegativeCommentsExcel };
